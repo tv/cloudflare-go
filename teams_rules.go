@@ -112,9 +112,9 @@ type TeamsRule struct {
 	Enabled       bool               `json:"enabled"`
 	Action        TeamsGatewayAction `json:"action"`
 	Filters       []TeamsFilterType  `json:"filters"`
-	Traffic       string             `json:"traffic"`
-	Identity      string             `json:"identity"`
-	DevicePosture string             `json:"device_posture"`
+	Traffic       string             `json:"traffic,omitempty"`
+	Identity      string             `json:"identity,omitempty"`
+	DevicePosture string             `json:"device_posture,omitempty"`
 	Version       uint64             `json:"version"`
 	RuleSettings  TeamsRuleSettings  `json:"rule_settings,omitempty"`
 }

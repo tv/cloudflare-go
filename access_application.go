@@ -52,6 +52,29 @@ type AccessApplication struct {
 	ServiceAuth401Redirect  bool                           `json:"service_auth_401_redirect,omitempty"`
 }
 
+// AccessApplicationWithRules represents an Access application when it's being created
+type AccessApplicationWithRules struct {
+	AccessApplication
+	GatewayRules []AccessApplicationCreateGatewayRule `json:"gateway_rules,omitempty"`
+}
+
+type AccessApplicationCreateGatewayRule struct {
+	TeamsRule
+	Conditions []TeamsRuleCondition `json:"conditions,omitempty"`
+}
+
+type TeamsRuleConditionType string
+
+const (
+	TeamsRuleConditionTraffic  TeamsRuleConditionType = "traffic"
+	TeamsRuleConditionIdentity TeamsRuleConditionType = "identity"
+)
+
+type TeamsRuleCondition struct {
+	Type       TeamsRuleConditionType `json:"type,omitempty"`
+	Expression map[string]interface{} `json:"expression,omitempty"`
+}
+
 type AccessApplicationGatewayRule struct {
 	ID string `json:"id,omitempty"`
 }
@@ -196,6 +219,28 @@ func (api *API) CreateZoneLevelAccessApplication(ctx context.Context, zoneID str
 }
 
 func (api *API) createAccessApplication(ctx context.Context, id string, accessApplication AccessApplication, routeRoot RouteRoot) (AccessApplication, error) {
+	uri := fmt.Sprintf("/%s/%s/access/apps", routeRoot, id)
+
+	res, err := api.makeRequestContext(ctx, http.MethodPost, uri, accessApplication)
+	if err != nil {
+		return AccessApplication{}, err
+	}
+
+	var accessApplicationDetailResponse AccessApplicationDetailResponse
+	err = json.Unmarshal(res, &accessApplicationDetailResponse)
+	if err != nil {
+		return AccessApplication{}, errors.Wrap(err, errUnmarshalError)
+	}
+
+	return accessApplicationDetailResponse.Result, nil
+}
+
+// CreateAccessApplicationWithRules
+func (api *API) CreateAccessApplicationWithRules(ctx context.Context, accountID string, accessApplication AccessApplicationWithRules) (AccessApplication, error) {
+	return api.createAccessApplicationWithRules(ctx, accountID, accessApplication, AccountRouteRoot)
+}
+
+func (api *API) createAccessApplicationWithRules(ctx context.Context, id string, accessApplication AccessApplicationWithRules, routeRoot RouteRoot) (AccessApplication, error) {
 	uri := fmt.Sprintf("/%s/%s/access/apps", routeRoot, id)
 
 	res, err := api.makeRequestContext(ctx, http.MethodPost, uri, accessApplication)
