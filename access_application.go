@@ -309,7 +309,7 @@ func (api *API) createAccessApplicationWithRules(ctx context.Context, id string,
 	var accessApplicationDetailResponse AccessApplicationDetailResponse
 	err = json.Unmarshal(res, &accessApplicationDetailResponse)
 	if err != nil {
-		return AccessApplication{}, errors.Wrap(err, errUnmarshalError)
+		return AccessApplication{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return accessApplicationDetailResponse.Result, nil
