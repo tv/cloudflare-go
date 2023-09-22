@@ -133,21 +133,25 @@ func zoneCreateLockdown(c *cli.Context) error {
 			Value:  c.StringSlice("values")[index],
 		})
 	}
-	lockdown := cloudflare.ZoneLockdown{
+	params := cloudflare.ZoneLockdownCreateParams{
 		Description:    c.String("description"),
 		URLs:           c.StringSlice("urls"),
 		Configurations: zonelockdownconfigs,
 	}
 
-	var resp *cloudflare.ZoneLockdownResponse
-
-	resp, err = api.CreateZoneLockdown(context.Background(), zoneID, lockdown)
+	resp, err := api.CreateZoneLockdown(context.Background(), cloudflare.ZoneIdentifier(zoneID), params)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error creating ZONE lock down: ", err)
 		return err
 	}
+
 	output := make([][]string, 0, 1)
-	output = append(output, formatLockdownResponse(resp))
+
+	format := []string{
+		resp.ID,
+	}
+
+	output = append(output, format)
 
 	writeTable(c, output, "ID")
 
@@ -275,11 +279,11 @@ func zoneRecords(c *cli.Context) error {
 		return err
 	}
 
-	// Create a an empty record for searching for records
-	rr := cloudflare.DNSRecord{}
+	// Create an empty record for searching for records
+	rr := cloudflare.ListDNSRecordsParams{}
 	var records []cloudflare.DNSRecord
 	if c.String("id") != "" {
-		rec, err := api.DNSRecord(context.Background(), zoneID, c.String("id"))
+		rec, err := api.GetDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), c.String("id"))
 		if err != nil {
 			fmt.Println(err)
 			return err
@@ -296,7 +300,7 @@ func zoneRecords(c *cli.Context) error {
 			rr.Content = c.String("content")
 		}
 		var err error
-		records, err = api.DNSRecords(context.Background(), zoneID, rr)
+		records, _, err = api.ListDNSRecords(context.Background(), cloudflare.ZoneIdentifier(zoneID), rr)
 		if err != nil {
 			fmt.Println(err)
 			return err
@@ -306,7 +310,7 @@ func zoneRecords(c *cli.Context) error {
 	for _, r := range records {
 		switch r.Type {
 		case "MX":
-			r.Content = fmt.Sprintf("%d %s", r.Priority, r.Content)
+			r.Content = fmt.Sprintf("%d %s", *r.Priority, r.Content)
 		case "SRV":
 			dp := r.Data.(map[string]interface{})
 			r.Content = fmt.Sprintf("%.f %s", dp["priority"], r.Content)
@@ -330,12 +334,6 @@ func zoneRecords(c *cli.Context) error {
 }
 
 func formatCacheResponse(resp cloudflare.PurgeCacheResponse) []string {
-	return []string{
-		resp.Result.ID,
-	}
-}
-
-func formatLockdownResponse(resp *cloudflare.ZoneLockdownResponse) []string {
 	return []string{
 		resp.Result.ID,
 	}

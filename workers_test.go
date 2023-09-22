@@ -2,15 +2,18 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -20,17 +23,7 @@ const (
     "errors": [],
     "messages": []
 }`
-	uploadWorkerResponseData = `{
-    "result": {
-        "script": "addEventListener('fetch', event => {\n    event.passThroughOnException()\nevent.respondWith(handleRequest(event.request))\n})\n\nasync function handleRequest(request) {\n    return fetch(request)\n}",
-        "etag": "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
-        "size": 191,
-        "modified_on": "2018-06-09T15:17:01.989141Z"
-    },
-    "success": true,
-    "errors": [],
-    "messages": []
-}`
+
 	updateWorkerRouteResponse = `{
     "result": {
         "id": "e7a57d8746e74ae49c25994dadb421b1",
@@ -76,7 +69,7 @@ const (
     "errors": [],
     "messages": []
 }`
-	listRouteEntResponseData = `{
+	listWorkerRouteResponse = `{
     "result": [
         {
             "id": "e7a57d8746e74ae49c25994dadb421b1",
@@ -90,7 +83,8 @@ const (
         },
         {
             "id": "2b5bf4240cd34c77852fac70b1bf745a",
-            "pattern": "app3.example.com/*"
+            "pattern": "app3.example.com/*",
+			"script": "test_script_3"
         }
     ],
     "success": true,
@@ -128,8 +122,24 @@ const (
 				"type": "secret_text"
 			},
 			{
+				"name": "MY_SERVICE_BINDING",
+				"type": "service",
+				"service": "MY_SERVICE",
+				"environment": "MY_ENVIRONMENT"
+			},
+			{
 				"name": "MY_NEW_BINDING",
 				"type": "some_imaginary_new_binding_type"
+			},
+			{
+				"name": "MY_BUCKET",
+				"type": "r2_bucket",
+				"bucket_name": "bucket"
+			},
+			{
+				"name": "MY_DATASET",
+				"type": "analytics_engine",
+				"dataset": "my_dataset"
 			}
 		],
 		"success": true,
@@ -155,13 +165,174 @@ const (
   "errors": [],
   "messages": []
 }`
+	workerMetadata = `{
+		"id": "e7a57d8746e74ae49c25994dadb421b1",
+		"etag": "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+		"logpush": true
+	}`
+	workerScript = `addEventListener('fetch', event => {
+  event.passThroughOnException()
+  event.respondWith(handleRequest(event.request))
+})
+
+async function handleRequest(request) {
+  return fetch(request)
+}`
+	workerModuleScript = `export default {
+  async fetch(request, env, event) {
+    event.passThroughOnException()
+    return fetch(request)
+  }
+}`
+	workerModuleScriptDownloadResponse = `
+--workermodulescriptdownload
+Content-Disposition: form-data; name="worker.js"
+
+export default {
+  async fetch(request, env, event) {
+    event.passThroughOnException()
+    return fetch(request)
+  }
+}
+--workermodulescriptdownload--
+`
 )
 
 var (
 	successResponse               = Response{Success: true, Errors: []ResponseInfo{}, Messages: []ResponseInfo{}}
-	workerScript                  = "addEventListener('fetch', event => {\n    event.passThroughOnException()\nevent.respondWith(handleRequest(event.request))\n})\n\nasync function handleRequest(request) {\n    return fetch(request)\n}"
 	deleteWorkerRouteResponseData = createWorkerRouteResponse
+	attachWorkerToDomainResponse  = fmt.Sprintf(`{
+    "result": {
+        "id": "e7a57d8746e74ae49c25994dadb421b1",
+	"zone_id": "%s",
+	"service":"test_script_1",
+	"hostname":"api4.example.com",
+	"environment":"production"
+    },
+    "success": true,
+    "errors": [],
+    "messages": []
+}`, testZoneID)
 )
+
+type (
+	WorkersTestScriptResponse struct {
+		Script            string                 `json:"script"`
+		UsageModel        string                 `json:"usage_model,omitempty"`
+		Handlers          []string               `json:"handlers"`
+		ID                string                 `json:"id,omitempty"`
+		ETAG              string                 `json:"etag,omitempty"`
+		Size              uint                   `json:"size,omitempty"`
+		CreatedOn         string                 `json:"created_on,omitempty"`
+		ModifiedOn        string                 `json:"modified_on,omitempty"`
+		LastDeployedFrom  *string                `json:"last_deployed_from,omitempty"`
+		DeploymentId      *string                `json:"deployment_id,omitempty"`
+		CompatibilityDate *string                `json:"compatibility_date,omitempty"`
+		Logpush           *bool                  `json:"logpush,omitempty"`
+		TailConsumers     *[]WorkersTailConsumer `json:"tail_consumers,omitempty"`
+		PlacementMode     *string                `json:"placement_mode,omitempty"`
+	}
+	workersTestResponseOpt func(r *WorkersTestScriptResponse)
+)
+
+var (
+	expectedWorkersServiceWorkerScript = "addEventListener('fetch', event => {\n  event.passThroughOnException()\n  event.respondWith(handleRequest(event.request))\n})\n\nasync function handleRequest(request) {\n  return fetch(request)\n}"
+	expectedWorkersModuleWorkerScript  = "export default {\n  async fetch(request, env, event) {\n    event.passThroughOnException()\n    return fetch(request)\n  }\n}"
+	WorkersDefaultTestResponse         = WorkersTestScriptResponse{
+		Script:            expectedWorkersServiceWorkerScript,
+		Handlers:          []string{"fetch"},
+		UsageModel:        "unbound",
+		ID:                "e7a57d8746e74ae49c25994dadb421b1",
+		ETAG:              "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+		Size:              191,
+		LastDeployedFrom:  StringPtr("dash"),
+		Logpush:           BoolPtr(false),
+		CompatibilityDate: StringPtr("2022-07-12"),
+	}
+)
+
+//nolint:unused
+func withWorkerScript(content string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.Script = content }
+}
+
+//nolint:unused
+func withWorkerUsageModel(um string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.UsageModel = um }
+}
+
+//nolint:unused
+func withWorkerHandlers(h []string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.Handlers = h }
+}
+
+//nolint:unused
+func withWorkerID(id string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.ID = id }
+}
+
+//nolint:unused
+func withWorkerEtag(etag string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.ETAG = etag }
+}
+
+//nolint:unused
+func withWorkerSize(size uint) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.Size = size }
+}
+
+//nolint:unused
+func withWorkerCreatedOn(co time.Time) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.CreatedOn = co.Format(time.RFC3339Nano) }
+}
+
+//nolint:unused
+func withWorkerModifiedOn(mo time.Time) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.ModifiedOn = mo.Format(time.RFC3339Nano) }
+}
+
+//nolint:unused
+func withWorkerLogpush(logpush *bool) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.Logpush = logpush }
+}
+
+//nolint:unused
+func withWorkerPlacementMode(mode *string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.PlacementMode = mode }
+}
+
+//nolint:unused
+func withWorkerTailConsumers(consumers ...WorkersTailConsumer) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.TailConsumers = &consumers }
+}
+
+//nolint:unused
+func withWorkerLastDeployedFrom(from *string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.LastDeployedFrom = from }
+}
+
+//nolint:unused
+func withWorkerDeploymentId(dID *string) workersTestResponseOpt {
+	return func(r *WorkersTestScriptResponse) { r.DeploymentId = dID }
+}
+
+func workersScriptResponse(t testing.TB, opts ...workersTestResponseOpt) string {
+	var responseConfig = WorkersDefaultTestResponse
+	for _, opt := range opts {
+		opt(&responseConfig)
+	}
+
+	bytes, err := json.Marshal(struct {
+		Response
+		Result WorkersTestScriptResponse `json:"result"`
+	}{
+		Response: Response{Success: true, Errors: []ResponseInfo{}, Messages: []ResponseInfo{}},
+		Result:   responseConfig,
+	})
+	require.NoError(t, err)
+
+	return string(bytes)
+}
 
 func getFormValue(r *http.Request, key string) ([]byte, error) {
 	err := r.ParseMultipartForm(1024 * 1024)
@@ -186,15 +357,35 @@ func getFormValue(r *http.Request, key string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		return ioutil.ReadAll(file)
+		return io.ReadAll(file)
+	}
+
+	return nil, fmt.Errorf("no value found for key %v", key)
+}
+
+func getFileDetails(r *http.Request, key string) (*multipart.FileHeader, error) {
+	err := r.ParseMultipartForm(1024 * 1024)
+	if err != nil {
+		return nil, err
+	}
+
+	fileHeaders := r.MultipartForm.File[key]
+
+	if len(fileHeaders) > 0 {
+		return fileHeaders[0], nil
 	}
 
 	return nil, fmt.Errorf("no value found for key %v", key)
 }
 
 type multipartUpload struct {
-	Script      string
-	BindingMeta map[string]workerBindingMeta
+	Script             string
+	BindingMeta        map[string]workerBindingMeta
+	Logpush            *bool
+	CompatibilityDate  string
+	CompatibilityFlags []string
+	Placement          *Placement
+	Tags               []string
 }
 
 func parseMultipartUpload(r *http.Request) (multipartUpload, error) {
@@ -205,8 +396,14 @@ func parseMultipartUpload(r *http.Request) (multipartUpload, error) {
 	}
 
 	var metadata struct {
-		BodyPart string              `json:"body_part"`
-		Bindings []workerBindingMeta `json:"bindings"`
+		BodyPart           string              `json:"body_part,omitempty"`
+		MainModule         string              `json:"main_module,omitempty"`
+		Bindings           []workerBindingMeta `json:"bindings"`
+		Logpush            *bool               `json:"logpush,omitempty"`
+		CompatibilityDate  string              `json:"compatibility_date,omitempty"`
+		CompatibilityFlags []string            `json:"compatibility_flags,omitempty"`
+		Placement          *Placement          `json:"placement,omitempty"`
+		Tags               []string            `json:"tags"`
 	}
 	err = json.Unmarshal(mdBytes, &metadata)
 	if err != nil {
@@ -216,7 +413,11 @@ func parseMultipartUpload(r *http.Request) (multipartUpload, error) {
 	// Get the script
 	script, err := getFormValue(r, metadata.BodyPart)
 	if err != nil {
-		return multipartUpload{}, err
+		script, err = getFormValue(r, metadata.MainModule)
+
+		if err != nil {
+			return multipartUpload{}, err
+		}
 	}
 
 	// Since bindings are specified in the Go API as a map but are uploaded as a
@@ -229,67 +430,43 @@ func parseMultipartUpload(r *http.Request) (multipartUpload, error) {
 	}
 
 	return multipartUpload{
-		Script:      string(script),
-		BindingMeta: bindingMeta,
+		Script:             string(script),
+		BindingMeta:        bindingMeta,
+		Logpush:            metadata.Logpush,
+		CompatibilityDate:  metadata.CompatibilityDate,
+		CompatibilityFlags: metadata.CompatibilityFlags,
+		Placement:          metadata.Placement,
+		Tags:               metadata.Tags,
 	}, nil
 }
 
-func TestWorkers_DeleteWorker(t *testing.T) {
+func TestDeleteWorker(t *testing.T) {
 	setup()
 	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/script", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method, "Expected method 'DELETE', got %s", r.Method)
 		w.Header().Set("content-type", "application/javascript")
-		fmt.Fprintf(w, deleteWorkerResponseData) //nolint
+		fmt.Fprint(w, deleteWorkerResponseData)
 	})
-	res, err := client.DeleteWorker(context.Background(), &WorkerRequestParams{ZoneID: "foo"})
-	want := WorkerScriptResponse{
-		successResponse,
-		WorkerScript{}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want.Response, res.Response)
-	}
+
+	err := client.DeleteWorker(context.Background(), AccountIdentifier(testAccountID), DeleteWorkerParams{ScriptName: "bar"})
+	assert.NoError(t, err)
 }
 
-func TestWorkers_DeleteWorkerWithName(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodDelete, r.Method, "Expected method 'DELETE', got %s", r.Method)
-		w.Header().Set("content-type", "application/javascript")
-		fmt.Fprintf(w, deleteWorkerResponseData) //nolint
-	})
-	res, err := client.DeleteWorker(context.Background(), &WorkerRequestParams{ScriptName: "bar"})
-	want := WorkerScriptResponse{
-		successResponse,
-		WorkerScript{}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want.Response, res.Response)
-	}
-}
-
-func TestWorkers_DeleteWorkerWithNameErrorsWithoutAccountId(t *testing.T) {
+func TestGetWorker(t *testing.T) {
 	setup()
 	defer teardown()
 
-	_, err := client.DeleteWorker(context.Background(), &WorkerRequestParams{ScriptName: "bar"})
-	assert.Error(t, err)
-}
-
-func TestWorkers_DownloadWorker(t *testing.T) {
-	setup()
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/script", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
 		w.Header().Set("content-type", "application/javascript")
-		fmt.Fprintf(w, workerScript) //nolint
+		fmt.Fprint(w, workerScript)
 	})
-	res, err := client.DownloadWorker(context.Background(), &WorkerRequestParams{ZoneID: "foo"})
+	res, err := client.GetWorker(context.Background(), AccountIdentifier(testAccountID), "foo")
 	want := WorkerScriptResponse{
 		successResponse,
+		false,
 		WorkerScript{
 			Script: workerScript,
 		}}
@@ -298,45 +475,132 @@ func TestWorkers_DownloadWorker(t *testing.T) {
 	}
 }
 
-func TestWorkers_DownloadWorkerWithName(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestGetWorker_Module(t *testing.T) {
+	setup()
 	defer teardown()
 
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application/javascript")
-		fmt.Fprintf(w, workerScript) //nolint
+		w.Header().Set("content-type", "multipart/form-data; boundary=workermodulescriptdownload")
+		fmt.Fprint(w, workerModuleScriptDownloadResponse)
 	})
-	res, err := client.DownloadWorker(context.Background(), &WorkerRequestParams{ScriptName: "bar"})
+
+	res, err := client.GetWorker(context.Background(), AccountIdentifier(testAccountID), "foo")
 	want := WorkerScriptResponse{
 		successResponse,
+		true,
 		WorkerScript{
-			Script: workerScript,
-		}}
+			Script: workerModuleScript,
+		},
+	}
+
 	if assert.NoError(t, err) {
 		assert.Equal(t, want.Script, res.Script)
 	}
 }
 
-func TestWorkers_DownloadWorkerWithNameErrorsWithoutAccountId(t *testing.T) {
+func TestGetWorkersScriptContent(t *testing.T) {
 	setup()
 	defer teardown()
 
-	_, err := client.DownloadWorker(context.Background(), &WorkerRequestParams{ScriptName: "bar"})
-	assert.Error(t, err)
-}
-
-func TestWorkers_ListWorkerScripts(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/accounts/foo/workers/scripts", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo/content/v2", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, listWorkersResponseData) //nolint
+		w.Header().Set("content-type", "application/javascript")
+		fmt.Fprint(w, workerScript)
 	})
 
-	res, err := client.ListWorkerScripts(context.Background())
+	res, err := client.GetWorkersScriptContent(context.Background(), AccountIdentifier(testAccountID), "foo")
+	want := workerScript
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, res)
+	}
+}
+
+func TestUpdateWorkersScriptContent(t *testing.T) {
+	setup()
+	defer teardown()
+
+	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo/content", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+		contentTypeHeader := r.Header.Get("content-type")
+		assert.Equal(t, "application/javascript", contentTypeHeader, "Expected content-type request header to be 'application/javascript', got %s", contentTypeHeader)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t, withWorkerModifiedOn(formattedTime)))
+	})
+
+	res, err := client.UpdateWorkersScriptContent(context.Background(), AccountIdentifier(testAccountID), UpdateWorkersScriptContentParams{ScriptName: "foo", Script: workerScript})
+	want := WorkerScriptResponse{
+		successResponse,
+		false,
+		WorkerScript{
+			Script: workerScript,
+		},
+	}
+	if assert.NoError(t, err) {
+		assert.Equal(t, want.Script, res.Script)
+	}
+}
+
+func TestGetWorkersScriptSettings(t *testing.T) {
+	setup()
+	defer teardown()
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo/settings", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/javascript")
+		fmt.Fprint(w, workerMetadata)
+	})
+
+	res, err := client.GetWorkersScriptSettings(context.Background(), AccountIdentifier(testAccountID), "foo")
+	logpush := true
+	want := WorkerScriptSettingsResponse{
+		successResponse,
+		WorkerMetaData{
+			ID:      "e7a57d8746e74ae49c25994dadb421b1",
+			ETAG:    "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+			Logpush: &logpush,
+		}}
+	if assert.NoError(t, err) {
+		assert.Equal(t, want.WorkerMetaData, res.WorkerMetaData)
+	}
+}
+
+func TestUpdateWorkersScriptSettings(t *testing.T) {
+	setup()
+	defer teardown()
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo/settings", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method, "Expected method 'PATCH', got %s", r.Method)
+		w.Header().Set("content-type", "application/javascript")
+		fmt.Fprint(w, workerMetadata)
+	})
+
+	res, err := client.UpdateWorkersScriptSettings(context.Background(), AccountIdentifier(testAccountID), UpdateWorkersScriptSettingsParams{ScriptName: "foo"})
+	logpush := true
+	want := WorkerScriptSettingsResponse{
+		successResponse,
+		WorkerMetaData{
+			ID:      "e7a57d8746e74ae49c25994dadb421b1",
+			ETAG:    "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+			Logpush: &logpush,
+		}}
+	if assert.NoError(t, err) {
+		assert.Equal(t, want.WorkerMetaData, res.WorkerMetaData)
+	}
+}
+
+func TestListWorkers(t *testing.T) {
+	setup()
+	defer teardown()
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, listWorkersResponseData)
+	})
+
+	res, _, err := client.ListWorkers(context.Background(), AccountIdentifier(testAccountID), ListWorkersParams{})
 	sampleDate, _ := time.Parse(time.RFC3339Nano, "2018-04-22T17:10:48.938097Z")
 	want := []WorkerMetaData{
 		{
@@ -357,27 +621,32 @@ func TestWorkers_ListWorkerScripts(t *testing.T) {
 	}
 }
 
-func TestWorkers_UploadWorker(t *testing.T) {
+func TestUploadWorker_Basic(t *testing.T) {
 	setup()
 	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/script", func(w http.ResponseWriter, r *http.Request) {
+	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
 		contentTypeHeader := r.Header.Get("content-type")
 		assert.Equal(t, "application/javascript", contentTypeHeader, "Expected content-type request header to be 'application/javascript', got %s", contentTypeHeader)
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
+		fmt.Fprint(w, workersScriptResponse(t, withWorkerModifiedOn(formattedTime)))
 	})
-	res, err := client.UploadWorker(context.Background(), &WorkerRequestParams{ZoneID: "foo"}, workerScript)
-	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
+	res, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{ScriptName: "foo", Script: workerScript})
 	want := WorkerScriptResponse{
 		successResponse,
+		false,
 		WorkerScript{
-			Script: workerScript,
+			Script:     workerScript,
+			UsageModel: "unbound",
 			WorkerMetaData: WorkerMetaData{
-				ETAG:       "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
-				Size:       191,
-				ModifiedOn: formattedTime,
+				ID:               "e7a57d8746e74ae49c25994dadb421b1",
+				ETAG:             "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+				Size:             191,
+				ModifiedOn:       formattedTime,
+				Logpush:          BoolPtr(false),
+				LastDeployedFrom: StringPtr("dash"),
 			},
 		}}
 	if assert.NoError(t, err) {
@@ -385,74 +654,95 @@ func TestWorkers_UploadWorker(t *testing.T) {
 	}
 }
 
-func TestWorkers_UploadWorkerWithName(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		contentTypeHeader := r.Header.Get("content-type")
-		assert.Equal(t, "application/javascript", contentTypeHeader, "Expected content-type request header to be 'application/javascript', got %s", contentTypeHeader)
-		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
-	})
-	res, err := client.UploadWorker(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, workerScript)
-	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
-	want := WorkerScriptResponse{
-		successResponse,
-		WorkerScript{
-			Script: workerScript,
-			WorkerMetaData: WorkerMetaData{
-				ETAG:       "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
-				Size:       191,
-				ModifiedOn: formattedTime,
-			},
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_UploadWorkerSingleScriptWithAccount(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/script", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		contentTypeHeader := r.Header.Get("content-type")
-		assert.Equal(t, "application/javascript", contentTypeHeader, "Expected content-type request header to be 'application/javascript', got %s", contentTypeHeader)
-		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
-	})
-	res, err := client.UploadWorker(context.Background(), &WorkerRequestParams{ZoneID: "foo"}, workerScript)
-	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
-	want := WorkerScriptResponse{
-		successResponse,
-		WorkerScript{
-			Script: workerScript,
-			WorkerMetaData: WorkerMetaData{
-				ETAG:       "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
-				Size:       191,
-				ModifiedOn: formattedTime,
-			},
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_UploadWorkerWithNameErrorsWithoutAccountId(t *testing.T) {
+func TestUploadWorker_Module(t *testing.T) {
 	setup()
 	defer teardown()
 
-	_, err := client.UploadWorker(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, workerScript)
-	assert.Error(t, err)
+	formattedCreatedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo", func(w http.ResponseWriter, r *http.Request) {
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		assert.Equal(t, workerModuleScript, mpUpload.Script)
+
+		workerFileDetails, err := getFileDetails(r, "worker.mjs")
+		if !assert.NoError(t, err) {
+			assert.FailNow(t, "worker file not found in multipart form body")
+		}
+		contentTypeHeader := workerFileDetails.Header.Get("content-type")
+		expectedContentType := "application/javascript+module"
+		assert.Equal(t, expectedContentType, contentTypeHeader, "Expected content-type request header to be %s, got %s", expectedContentType, contentTypeHeader)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t, withWorkerScript(expectedWorkersModuleWorkerScript), withWorkerCreatedOn(formattedCreatedTime)))
+	})
+	res, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{ScriptName: "foo", Script: workerModuleScript, Module: true})
+	want := WorkerScriptResponse{
+		Response: successResponse,
+		Module:   false,
+		WorkerScript: WorkerScript{
+			Script:     workerModuleScript,
+			UsageModel: "unbound",
+			WorkerMetaData: WorkerMetaData{
+				ID:               "e7a57d8746e74ae49c25994dadb421b1",
+				ETAG:             "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+				Size:             191,
+				CreatedOn:        formattedCreatedTime,
+				Logpush:          BoolPtr(false),
+				LastDeployedFrom: StringPtr("dash"),
+			},
+		}}
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, res)
+	}
 }
 
-func TestWorkers_UploadWorkerWithInheritBinding(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_WithDurableObjectBinding(t *testing.T) {
+	setup()
 	defer teardown()
 
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		expectedBindings := map[string]workerBindingMeta{
+			"b1": {
+				"name":        "b1",
+				"type":        "durable_object_namespace",
+				"class_name":  "TheClass",
+				"script_name": "the_script",
+			},
+		}
+		assert.Equal(t, workerScript, mpUpload.Script)
+		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
+		Bindings: map[string]WorkerBinding{
+			"b1": WorkerDurableObjectBinding{
+				ClassName:  "TheClass",
+				ScriptName: "the_script",
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+}
+
+func TestUploadWorker_WithInheritBinding(t *testing.T) {
+	setup()
+	defer teardown()
+
+	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
 	// Setup route handler for both single-script and multi-script
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
@@ -475,49 +765,42 @@ func TestWorkers_UploadWorkerWithInheritBinding(t *testing.T) {
 		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
 
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
+		fmt.Fprint(w, workersScriptResponse(t, withWorkerModifiedOn(formattedTime)))
 	}
-	mux.HandleFunc("/zones/foo/workers/script", handler)
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", handler)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
 
-	scriptParams := WorkerScriptParams{
-		Script: workerScript,
+	want := WorkerScriptResponse{
+		Response: successResponse,
+		Module:   false,
+		WorkerScript: WorkerScript{
+			Script:     workerScript,
+			UsageModel: "unbound",
+			WorkerMetaData: WorkerMetaData{
+				ID:               "e7a57d8746e74ae49c25994dadb421b1",
+				ETAG:             "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+				Size:             191,
+				ModifiedOn:       formattedTime,
+				Logpush:          BoolPtr(false),
+				LastDeployedFrom: StringPtr("dash"),
+			},
+		}}
+
+	res, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
 		Bindings: map[string]WorkerBinding{
 			"b1": WorkerInheritBinding{},
 			"b2": WorkerInheritBinding{
 				OldName: "old_binding_name",
 			},
-		},
-	}
-
-	// Expected response
-	formattedTime, _ := time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
-	want := WorkerScriptResponse{
-		successResponse,
-		WorkerScript{
-			Script: workerScript,
-			WorkerMetaData: WorkerMetaData{
-				ETAG:       "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
-				Size:       191,
-				ModifiedOn: formattedTime,
-			},
-		}}
-
-	// Test single-script
-	res, err := client.UploadWorkerWithBindings(context.Background(), &WorkerRequestParams{ZoneID: "foo"}, &scriptParams)
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-
-	// Test multi-script
-	res, err = client.UploadWorkerWithBindings(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, &scriptParams)
+		}})
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, res)
 	}
 }
 
-func TestWorkers_UploadWorkerWithKVBinding(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_WithKVBinding(t *testing.T) {
+	setup()
 	defer teardown()
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -537,24 +820,23 @@ func TestWorkers_UploadWorkerWithKVBinding(t *testing.T) {
 		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
 
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", handler)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
 
-	scriptParams := WorkerScriptParams{
-		Script: workerScript,
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
 		Bindings: map[string]WorkerBinding{
 			"b1": WorkerKvNamespaceBinding{
 				NamespaceID: "test-namespace",
 			},
-		},
-	}
-	_, err := client.UploadWorkerWithBindings(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, &scriptParams)
+		}})
 	assert.NoError(t, err)
 }
 
-func TestWorkers_UploadWorkerWithWasmBinding(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_WithWasmBinding(t *testing.T) {
+	setup()
 	defer teardown()
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -579,24 +861,25 @@ func TestWorkers_UploadWorkerWithWasmBinding(t *testing.T) {
 		assert.Equal(t, []byte("fake-wasm"), wasmContent)
 
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", handler)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
 
-	scriptParams := WorkerScriptParams{
-		Script: workerScript,
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
 		Bindings: map[string]WorkerBinding{
 			"b1": WorkerWebAssemblyBinding{
 				Module: strings.NewReader("fake-wasm"),
 			},
 		},
-	}
-	_, err := client.UploadWorkerWithBindings(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, &scriptParams)
+	})
+
 	assert.NoError(t, err)
 }
 
-func TestWorkers_UploadWorkerWithPlainTextBinding(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_WithPlainTextBinding(t *testing.T) {
+	setup()
 	defer teardown()
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -616,24 +899,71 @@ func TestWorkers_UploadWorkerWithPlainTextBinding(t *testing.T) {
 		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
 
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", handler)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
 
-	scriptParams := WorkerScriptParams{
-		Script: workerScript,
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
 		Bindings: map[string]WorkerBinding{
 			"b1": WorkerPlainTextBinding{
 				Text: "plain text value",
 			},
 		},
-	}
-	_, err := client.UploadWorkerWithBindings(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, &scriptParams)
+	})
+
 	assert.NoError(t, err)
 }
 
-func TestWorkers_UploadWorkerWithSecretTextBinding(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_ModuleWithPlainTextBinding(t *testing.T) {
+	setup()
+	defer teardown()
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		expectedBindings := map[string]workerBindingMeta{
+			"b1": {
+				"name": "b1",
+				"type": "plain_text",
+				"text": "plain text value",
+			},
+		}
+		assert.Equal(t, workerModuleScript, mpUpload.Script)
+		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
+
+		workerFileDetails, err := getFileDetails(r, "worker.mjs")
+		if !assert.NoError(t, err) {
+			assert.FailNow(t, "worker file not found in multipart form body")
+		}
+		contentDispositonHeader := workerFileDetails.Header.Get("content-disposition")
+		expectedContentDisposition := fmt.Sprintf(`form-data; name="%s"; filename="%[1]s"`, "worker.mjs")
+		assert.Equal(t, expectedContentDisposition, contentDispositonHeader, "Expected content-disposition request header to be %s, got %s", expectedContentDisposition, contentDispositonHeader)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t, withWorkerScript(expectedWorkersModuleWorkerScript)))
+	})
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerModuleScript,
+		Module:     true,
+		Bindings: map[string]WorkerBinding{
+			"b1": WorkerPlainTextBinding{
+				Text: "plain text value",
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+}
+
+func TestUploadWorker_WithSecretTextBinding(t *testing.T) {
+	setup()
 	defer teardown()
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -653,346 +983,423 @@ func TestWorkers_UploadWorkerWithSecretTextBinding(t *testing.T) {
 		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
 
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprintf(w, uploadWorkerResponseData) //nolint
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
-	mux.HandleFunc("/accounts/foo/workers/scripts/bar", handler)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
 
-	scriptParams := WorkerScriptParams{
-		Script: workerScript,
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
 		Bindings: map[string]WorkerBinding{
 			"b1": WorkerSecretTextBinding{
 				Text: "secret text value",
 			},
 		},
+	})
+	assert.NoError(t, err)
+}
+
+func TestUploadWorker_WithServiceBinding(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		expectedBindings := map[string]workerBindingMeta{
+			"b1": {
+				"name":    "b1",
+				"type":    "service",
+				"service": "the_service",
+			},
+			"b2": {
+				"name":        "b2",
+				"type":        "service",
+				"service":     "the_service",
+				"environment": "the_environment",
+			},
+		}
+		assert.Equal(t, workerScript, mpUpload.Script)
+		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
-	_, err := client.UploadWorkerWithBindings(context.Background(), &WorkerRequestParams{ScriptName: "bar"}, &scriptParams)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
+		Bindings: map[string]WorkerBinding{
+			"b1": WorkerServiceBinding{
+				Service: "the_service",
+			},
+			"b2": WorkerServiceBinding{
+				Service:     "the_service",
+				Environment: StringPtr("the_environment"),
+			},
+		},
+	})
 	assert.NoError(t, err)
 }
 
-func TestWorkers_CreateWorkerRoute(t *testing.T) {
+func TestUploadWorker_WithLogpush(t *testing.T) {
 	setup()
 	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/filters", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, createWorkerRouteResponse) //nolint
+	var (
+		formattedTime, _ = time.Parse(time.RFC3339Nano, "2018-06-09T15:17:01.989141Z")
+		logpush          = BoolPtr(true)
+	)
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/foo", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		expected := true
+		assert.Equal(t, &expected, mpUpload.Logpush)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t, withWorkerScript(expectedWorkersModuleWorkerScript), withWorkerLogpush(logpush), withWorkerModifiedOn(formattedTime)))
 	})
-	route := WorkerRoute{Pattern: "app1.example.com/*", Enabled: true}
-	res, err := client.CreateWorkerRoute(context.Background(), "foo", route)
-	want := WorkerRouteResponse{successResponse, WorkerRoute{ID: "e7a57d8746e74ae49c25994dadb421b1"}}
+	res, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{ScriptName: "foo", Script: workerScript, Logpush: logpush})
+	want := WorkerScriptResponse{
+		Response: successResponse,
+		Module:   false,
+		WorkerScript: WorkerScript{
+			Script:     expectedWorkersModuleWorkerScript,
+			UsageModel: "unbound",
+			WorkerMetaData: WorkerMetaData{
+				ID:               "e7a57d8746e74ae49c25994dadb421b1",
+				ETAG:             "279cf40d86d70b82f6cd3ba90a646b3ad995912da446836d7371c21c6a43977a",
+				Size:             191,
+				ModifiedOn:       formattedTime,
+				Logpush:          logpush,
+				LastDeployedFrom: StringPtr("dash"),
+			},
+		}}
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, res)
 	}
 }
 
-func TestWorkers_CreateWorkerRouteEnt(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_WithCompatibilityFlags(t *testing.T) {
+	setup()
 	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/routes", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, createWorkerRouteResponse) //nolint
-	})
-	route := WorkerRoute{Pattern: "app1.example.com/*", Script: "test_script"}
-	res, err := client.CreateWorkerRoute(context.Background(), "foo", route)
-	want := WorkerRouteResponse{successResponse, WorkerRoute{ID: "e7a57d8746e74ae49c25994dadb421b1"}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
+	compatibilityDate := time.Now().Format("2006-01-02")
+	compatibilityFlags := []string{"formdata_parser_supports_files"}
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		assert.Equal(t, workerScript, mpUpload.Script)
+		assert.Equal(t, compatibilityDate, mpUpload.CompatibilityDate)
+		assert.Equal(t, compatibilityFlags, mpUpload.CompatibilityFlags)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
-}
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
 
-func TestWorkers_CreateWorkerRouteSingleScriptWithAccount(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/filters", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, createWorkerRouteResponse) //nolint
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName:         "bar",
+		Script:             workerScript,
+		CompatibilityDate:  compatibilityDate,
+		CompatibilityFlags: compatibilityFlags,
 	})
-	route := WorkerRoute{Pattern: "app1.example.com/*", Enabled: true}
-	res, err := client.CreateWorkerRoute(context.Background(), "foo", route)
-	want := WorkerRouteResponse{successResponse, WorkerRoute{ID: "e7a57d8746e74ae49c25994dadb421b1"}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_CreateWorkerRouteErrorsWhenMixingSingleAndMultiScriptProperties(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	route := WorkerRoute{Pattern: "app1.example.com/*", Script: "test_script", Enabled: true}
-	_, err := client.CreateWorkerRoute(context.Background(), "foo", route)
-	assert.EqualError(t, err, "Only `Script` or `Enabled` may be specified for a WorkerRoute, not both")
-}
-
-func TestWorkers_CreateWorkerRouteWithNoScript(t *testing.T) {
-	setup(UsingAccount("foo"))
-
-	mux.HandleFunc("/zones/foo/workers/routes", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, createWorkerRouteResponse) //nolint
-	})
-
-	route := WorkerRoute{Pattern: "app1.example.com/*"}
-	_, err := client.CreateWorkerRoute(context.Background(), "foo", route)
 	assert.NoError(t, err)
 }
 
-func TestWorkers_DeleteWorkerRoute(t *testing.T) {
+func TestUploadWorker_WithQueueBinding(t *testing.T) {
 	setup()
 	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/routes/e7a57d8746e74ae49c25994dadb421b1", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodDelete, r.Method, "Expected method 'DELETE', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, deleteWorkerRouteResponseData) //nolint
-	})
-	res, err := client.DeleteWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1")
-	want := WorkerRouteResponse{successResponse,
-		WorkerRoute{
-			ID: "e7a57d8746e74ae49c25994dadb421b1",
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		expectedBindings := map[string]workerBindingMeta{
+			"b1": {
+				"name":       "b1",
+				"type":       "queue",
+				"queue_name": "test-queue",
+			},
+		}
+		assert.Equal(t, workerScript, mpUpload.Script)
+		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
 	}
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
+		Bindings: map[string]WorkerBinding{
+			"b1": WorkerQueueBinding{
+				Binding: "b1",
+				Queue:   "test-queue",
+			},
+		}})
+	assert.NoError(t, err)
 }
 
-func TestWorkers_DeleteWorkerRouteEnt(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/routes/e7a57d8746e74ae49c25994dadb421b1", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodDelete, r.Method, "Expected method 'DELETE', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, deleteWorkerRouteResponseData) //nolint
-	})
-	res, err := client.DeleteWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1")
-	want := WorkerRouteResponse{successResponse,
-		WorkerRoute{
-			ID: "e7a57d8746e74ae49c25994dadb421b1",
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_ListWorkerRoutes(t *testing.T) {
+func TestUploadWorker_WithDispatchNamespaceBinding(t *testing.T) {
 	setup()
 	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/filters", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, listRouteResponseData) //nolint
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		expectedBindings := map[string]workerBindingMeta{
+			"b1": {
+				"name":      "b1",
+				"type":      "dispatch_namespace",
+				"namespace": "n1",
+				"outbound": map[string]interface{}{
+					"worker": map[string]interface{}{
+						"service":     "w1",
+						"environment": "e1",
+					},
+					"params": []interface{}{
+						map[string]interface{}{"name": "param1"},
+					},
+				},
+			},
+		}
+		assert.Equal(t, workerScript, mpUpload.Script)
+		assert.Equal(t, expectedBindings, mpUpload.BindingMeta)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
+	}
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	environmentName := "e1"
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
+		Bindings: map[string]WorkerBinding{
+			"b1": DispatchNamespaceBinding{
+				Binding:   "b1",
+				Namespace: "n1",
+				Outbound: &NamespaceOutboundOptions{
+					Worker: WorkerReference{
+						Service:     "w1",
+						Environment: &environmentName,
+					},
+					Params: []OutboundParamSchema{
+						{
+							Name: "param1",
+						},
+					},
+				},
+			},
+		}})
+	assert.NoError(t, err)
+}
+
+func TestUploadWorker_WithSmartPlacementEnabled(t *testing.T) {
+	setup()
+	defer teardown()
+
+	placementMode := PlacementModeSmart
+	response := workersScriptResponse(t, withWorkerScript(expectedWorkersModuleWorkerScript), withWorkerPlacementMode(StringPtr("smart")))
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		assert.Equal(t, workerScript, mpUpload.Script)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, response)
+	}
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	t.Run("Test enabling Smart Placement", func(t *testing.T) {
+		worker, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+			ScriptName: "bar",
+			Script:     workerScript,
+			Placement: &Placement{
+				Mode: placementMode,
+			},
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, placementMode, *worker.PlacementMode)
 	})
 
-	res, err := client.ListWorkerRoutes(context.Background(), "foo")
-	want := WorkerRoutesResponse{successResponse,
-		[]WorkerRoute{
-			{ID: "e7a57d8746e74ae49c25994dadb421b1", Pattern: "app1.example.com/*", Enabled: true},
-			{ID: "f8b68e9857f85bf59c25994dadb421b1", Pattern: "app2.example.com/*", Enabled: false},
+	t.Run("Test disabling placement", func(t *testing.T) {
+		placementMode = PlacementModeOff
+		response = workersScriptResponse(t, withWorkerScript(expectedWorkersModuleWorkerScript))
+
+		worker, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+			ScriptName: "bar",
+			Script:     workerScript,
+			Placement: &Placement{
+				Mode: placementMode,
+			},
+		})
+		assert.NoError(t, err)
+		assert.Nil(t, worker.PlacementMode)
+	})
+}
+
+func TestUploadWorker_WithTailConsumers(t *testing.T) {
+	setup()
+	defer teardown()
+
+	response := workersScriptResponse(t,
+		withWorkerScript(expectedWorkersModuleWorkerScript))
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		assert.NoError(t, err)
+
+		assert.Equal(t, workerScript, mpUpload.Script)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, response)
+	}
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	t.Run("adds tail consumers", func(t *testing.T) {
+		tailConsumers := []WorkersTailConsumer{
+			{Service: "my-service-a"},
+			{Service: "my-service-b", Environment: StringPtr("production")},
+			{Service: "a-namespaced-service", Namespace: StringPtr("a-dispatch-namespace")},
+		}
+		response = workersScriptResponse(t,
+			withWorkerScript(expectedWorkersModuleWorkerScript),
+			withWorkerTailConsumers(tailConsumers...))
+
+		worker, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+			ScriptName:    "bar",
+			Script:        workerScript,
+			TailConsumers: &tailConsumers,
+		})
+		assert.NoError(t, err)
+		require.NotNil(t, worker.TailConsumers)
+		assert.Len(t, *worker.TailConsumers, 3)
+	})
+}
+
+func TestUploadWorker_ToDispatchNamespace(t *testing.T) {
+	setup()
+	defer teardown()
+
+	namespaceName := "n1"
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		require.NoError(t, err)
+
+		assert.Equal(t, workerScript, mpUpload.Script)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
+	}
+	mux.HandleFunc(
+		fmt.Sprintf("/accounts/"+testAccountID+"/workers/dispatch/namespaces/%s/scripts/bar", namespaceName),
+		handler,
+	)
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName:            "bar",
+		Script:                workerScript,
+		DispatchNamespaceName: &namespaceName,
+		Bindings: map[string]WorkerBinding{
+			"b1": WorkerPlainTextBinding{
+				Text: "hello",
+			},
 		},
-	}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_ListWorkerRoutesEnt(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/routes", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, listRouteEntResponseData) //nolint
-	})
-
-	res, err := client.ListWorkerRoutes(context.Background(), "foo")
-	want := WorkerRoutesResponse{successResponse,
-		[]WorkerRoute{
-			{ID: "e7a57d8746e74ae49c25994dadb421b1", Pattern: "app1.example.com/*", Script: "test_script_1", Enabled: true},
-			{ID: "f8b68e9857f85bf59c25994dadb421b1", Pattern: "app2.example.com/*", Script: "test_script_2", Enabled: true},
-			{ID: "2b5bf4240cd34c77852fac70b1bf745a", Pattern: "app3.example.com/*", Script: "", Enabled: false},
-		},
-	}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_GetWorkerRoute(t *testing.T) {
-	setup()
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/routes/1234", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, getRouteResponseData) //nolint
-	})
-
-	res, err := client.GetWorkerRoute(context.Background(), "foo", "1234")
-	want := WorkerRouteResponse{successResponse,
-		WorkerRoute{
-			ID:      "e7a57d8746e74ae49c25994dadb421b1",
-			Pattern: "app1.example.com/*",
-			Script:  "script-name"},
-	}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_UpdateWorkerRoute(t *testing.T) {
-	setup()
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/filters/e7a57d8746e74ae49c25994dadb421b1", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, updateWorkerRouteResponse) //nolint
-	})
-	route := WorkerRoute{Pattern: "app3.example.com/*", Enabled: true}
-	res, err := client.UpdateWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1", route)
-	want := WorkerRouteResponse{successResponse,
-		WorkerRoute{
-			ID:      "e7a57d8746e74ae49c25994dadb421b1",
-			Pattern: "app3.example.com/*",
-			Enabled: true,
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_UpdateWorkerRouteEnt(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/routes/e7a57d8746e74ae49c25994dadb421b1", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, updateWorkerRouteEntResponse) //nolint
-	})
-	route := WorkerRoute{Pattern: "app3.example.com/*", Script: "test_script_1"}
-	res, err := client.UpdateWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1", route)
-	want := WorkerRouteResponse{successResponse,
-		WorkerRoute{
-			ID:      "e7a57d8746e74ae49c25994dadb421b1",
-			Pattern: "app3.example.com/*",
-			Script:  "test_script_1",
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_UpdateWorkerRouteSingleScriptWithAccount(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/zones/foo/workers/filters/e7a57d8746e74ae49c25994dadb421b1", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, updateWorkerRouteEntResponse) //nolint
-	})
-	route := WorkerRoute{Pattern: "app3.example.com/*", Enabled: true}
-	res, err := client.UpdateWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1", route)
-	want := WorkerRouteResponse{successResponse,
-		WorkerRoute{
-			ID:      "e7a57d8746e74ae49c25994dadb421b1",
-			Pattern: "app3.example.com/*",
-			Script:  "test_script_1",
-		}}
-	if assert.NoError(t, err) {
-		assert.Equal(t, want, res)
-	}
-}
-
-func TestWorkers_ListWorkerBindingsMultiScript(t *testing.T) {
-	setup(UsingAccount("foo"))
-	defer teardown()
-
-	mux.HandleFunc("/accounts/foo/workers/scripts/my-script/bindings", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, listBindingsResponseData) //nolint
-	})
-
-	mux.HandleFunc("/accounts/foo/workers/scripts/my-script/bindings/MY_WASM/content", func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
-		w.Header().Set("content-type", "application/wasm")
-		_, _ = w.Write([]byte("mock multi-script wasm"))
-	})
-
-	res, err := client.ListWorkerBindings(context.Background(), &WorkerRequestParams{
-		ScriptName: "my-script",
 	})
 	assert.NoError(t, err)
-
-	assert.Equal(t, successResponse, res.Response)
-	assert.Equal(t, 5, len(res.BindingList))
-
-	assert.Equal(t, res.BindingList[0], WorkerBindingListItem{
-		Name: "MY_KV",
-		Binding: WorkerKvNamespaceBinding{
-			NamespaceID: "89f5f8fd93f94cb98473f6f421aa3b65",
-		},
-	})
-	assert.Equal(t, WorkerKvNamespaceBindingType, res.BindingList[0].Binding.Type())
-
-	assert.Equal(t, "MY_WASM", res.BindingList[1].Name)
-	wasmBinding := res.BindingList[1].Binding.(WorkerWebAssemblyBinding)
-	wasmModuleContent, err := ioutil.ReadAll(wasmBinding.Module)
-	assert.NoError(t, err)
-	assert.Equal(t, []byte("mock multi-script wasm"), wasmModuleContent)
-	assert.Equal(t, WorkerWebAssemblyBindingType, res.BindingList[1].Binding.Type())
-
-	assert.Equal(t, res.BindingList[2], WorkerBindingListItem{
-		Name: "MY_PLAIN_TEXT",
-		Binding: WorkerPlainTextBinding{
-			Text: "text",
-		},
-	})
-	assert.Equal(t, WorkerPlainTextBindingType, res.BindingList[2].Binding.Type())
-
-	assert.Equal(t, res.BindingList[3], WorkerBindingListItem{
-		Name:    "MY_SECRET_TEXT",
-		Binding: WorkerSecretTextBinding{},
-	})
-	assert.Equal(t, WorkerSecretTextBindingType, res.BindingList[3].Binding.Type())
-
-	assert.Equal(t, res.BindingList[4], WorkerBindingListItem{
-		Name:    "MY_NEW_BINDING",
-		Binding: WorkerInheritBinding{},
-	})
-	assert.Equal(t, WorkerInheritBindingType, res.BindingList[4].Binding.Type())
 }
 
-func TestWorkers_UpdateWorkerRouteErrorsWhenMixingSingleAndMultiScriptProperties(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_ToDispatchNamespace_Tags(t *testing.T) {
+	setup()
 	defer teardown()
 
-	route := WorkerRoute{Pattern: "app1.example.com/*", Script: "test_script", Enabled: true}
-	_, err := client.UpdateWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1", route)
-	assert.EqualError(t, err, "Only `Script` or `Enabled` may be specified for a WorkerRoute, not both")
+	namespaceName := "n1"
+	tags := []string{"hello=there", "another-tag"}
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+
+		mpUpload, err := parseMultipartUpload(r)
+		require.NoError(t, err)
+
+		assert.Equal(t, workerScript, mpUpload.Script)
+
+		assert.EqualValues(t, tags, mpUpload.Tags)
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
+	}
+	mux.HandleFunc(
+		fmt.Sprintf("/accounts/"+testAccountID+"/workers/dispatch/namespaces/%s/scripts/bar", namespaceName),
+		handler,
+	)
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName:            "bar",
+		Script:                workerScript,
+		DispatchNamespaceName: &namespaceName,
+		Tags:                  tags,
+	})
+	assert.NoError(t, err)
 }
 
-func TestWorkers_UpdateWorkerRouteWithNoScript(t *testing.T) {
-	setup(UsingAccount("foo"))
+func TestUploadWorker_UnsafeBinding(t *testing.T) {
+	setup()
+	defer teardown()
 
-	mux.HandleFunc("/zones/foo/workers/routes/e7a57d8746e74ae49c25994dadb421b1", func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		w.Header().Set("content-type", "application-json")
-		fmt.Fprintf(w, updateWorkerRouteEntResponse) //nolint
-	})
 
-	route := WorkerRoute{Pattern: "app1.example.com/*"}
-	_, err := client.UpdateWorkerRoute(context.Background(), "foo", "e7a57d8746e74ae49c25994dadb421b1", route)
+		mpUpload, err := parseMultipartUpload(r)
+		require.NoError(t, err)
+
+		assert.Equal(t, workerScript, mpUpload.Script)
+
+		require.Contains(t, mpUpload.BindingMeta, "b1")
+		assert.Contains(t, mpUpload.BindingMeta["b1"], "name")
+		assert.Equal(t, "b1", mpUpload.BindingMeta["b1"]["name"])
+		assert.Contains(t, mpUpload.BindingMeta["b1"], "type")
+		assert.Equal(t, "dynamic_dispatch", mpUpload.BindingMeta["b1"]["type"])
+
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, workersScriptResponse(t))
+	}
+	mux.HandleFunc("/accounts/"+testAccountID+"/workers/scripts/bar", handler)
+
+	_, err := client.UploadWorker(context.Background(), AccountIdentifier(testAccountID), CreateWorkerParams{
+		ScriptName: "bar",
+		Script:     workerScript,
+		Bindings: map[string]WorkerBinding{
+			"b1": UnsafeBinding{
+				"type": "dynamic_dispatch",
+			},
+		},
+	})
 	assert.NoError(t, err)
 }

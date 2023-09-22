@@ -2,11 +2,10 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
 )
 
 type ListManagedHeadersResponse struct {
@@ -15,7 +14,6 @@ type ListManagedHeadersResponse struct {
 }
 
 type UpdateManagedHeadersParams struct {
-	ZoneID string
 	ManagedHeaders
 }
 
@@ -32,16 +30,15 @@ type ManagedHeader struct {
 }
 
 type ListManagedHeadersParams struct {
-	ZoneID string
+	Status string `url:"status,omitempty"`
 }
 
-func (api *API) ListZoneManagedHeaders(ctx context.Context, params ListManagedHeadersParams) (ManagedHeaders, error) {
-	if params.ZoneID == "" {
+func (api *API) ListZoneManagedHeaders(ctx context.Context, rc *ResourceContainer, params ListManagedHeadersParams) (ManagedHeaders, error) {
+	if rc.Identifier == "" {
 		return ManagedHeaders{}, ErrMissingZoneID
 	}
 
-	uri := fmt.Sprintf("/zones/%s/managed_headers", params.ZoneID)
-
+	uri := buildURI(fmt.Sprintf("/zones/%s/managed_headers", rc.Identifier), params)
 	res, err := api.makeRequestContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
 		return ManagedHeaders{}, err
@@ -49,18 +46,18 @@ func (api *API) ListZoneManagedHeaders(ctx context.Context, params ListManagedHe
 
 	result := ListManagedHeadersResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return ManagedHeaders{}, errors.Wrap(err, errUnmarshalError)
+		return ManagedHeaders{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result.Result, nil
 }
 
-func (api *API) UpdateZoneManagedHeaders(ctx context.Context, params UpdateManagedHeadersParams) (ManagedHeaders, error) {
-	if params.ZoneID == "" {
+func (api *API) UpdateZoneManagedHeaders(ctx context.Context, rc *ResourceContainer, params UpdateManagedHeadersParams) (ManagedHeaders, error) {
+	if rc.Identifier == "" {
 		return ManagedHeaders{}, ErrMissingZoneID
 	}
 
-	uri := fmt.Sprintf("/zones/%s/managed_headers", params.ZoneID)
+	uri := fmt.Sprintf("/zones/%s/managed_headers", rc.Identifier)
 
 	payload, err := json.Marshal(params.ManagedHeaders)
 	if err != nil {
@@ -74,7 +71,7 @@ func (api *API) UpdateZoneManagedHeaders(ctx context.Context, params UpdateManag
 
 	result := ListManagedHeadersResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return ManagedHeaders{}, errors.Wrap(err, errUnmarshalError)
+		return ManagedHeaders{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result.Result, nil

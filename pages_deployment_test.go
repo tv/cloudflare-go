@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	testPagesDeplyomentResponse = `
+	testPagesDeploymentResponse = `
 	{
 		"id": "0012e50b-fa5d-44db-8cb5-1f372785dcbe",
 		"short_id": "0012e50b",
@@ -91,50 +91,38 @@ const (
 		"aliases": null
 	}`
 
-	testPagesDeploymentStageLogsResponse = `
+	testPagesDeploymentLogsResponse = `
 	{
-		"name": "build",
-		"started_on": "2021-01-01T00:00:00Z",
-		"ended_on": "2021-01-01T00:00:00Z",
-		"status": "success",
-		"start": 0,
-		"end": 5,
 		"total": 6,
+		"includes_container_logs": true,
 		"data": [
 			{
-				"id": 0,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Installing dependencies"
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Installing dependencies"
 			},
 			{
-				"id": 1,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Verify run directory"
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Verify run directory"
 			},
 			{
-				"id": 2,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Executing user command: bash test.sh"
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Executing user command: bash test.sh"
 			},
 			{
-				"id": 3,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Finished"
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Finished"
 			},
 			{
-				"id": 4,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Building functions..."
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Building functions..."
 			},
 			{
-				"id": 5,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Validating asset output directory"
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Validating asset output directory"
 			},
 			{
-				"id": 6,
-				"timestamp": "2021-01-01T00:00:00Z",
-				"message": "Parsed 2 valid header rules."
+				"ts": "2021-01-01T00:00:00Z",
+				"line": "Parsed 2 valid header rules."
 			}
 		]
 	}`
@@ -154,9 +142,9 @@ var (
 		ModifiedOn:  &pagesDeploymentDummyTime,
 		Aliases:     nil,
 		LatestStage: *expectedPagesDeploymentLatestStage,
-		EnvVars: map[string]map[string]string{
-			"NODE_VERSION": {
-				"value": "16",
+		EnvVars: EnvironmentVariableMap{
+			"NODE_VERSION": &EnvironmentVariable{
+				Value: "16",
 			},
 		},
 		DeploymentTrigger: PagesProjectDeploymentTrigger{
@@ -219,52 +207,40 @@ var (
 		Status:    "success",
 	}
 
-	expectedPagesDeploymentStageLogs = &PagesDeploymentStageLogs{
-		Name:      "build",
-		StartedOn: &pagesDeploymentDummyTime,
-		EndedOn:   &pagesDeploymentDummyTime,
-		Status:    "success",
-		Start:     0,
-		End:       5,
-		Total:     6,
-		Data:      expectedPagesDeploymentStageLogEntries,
+	expectedPagesDeploymentLogs = &PagesDeploymentLogs{
+		Total:                 6,
+		IncludesContainerLogs: true,
+		Data:                  expectedPagesDeploymentLogEntries,
 	}
 
-	expectedPagesDeploymentStageLogEntries = []PagesDeploymentStageLogEntry{
+	expectedPagesDeploymentLogEntries = []PagesDeploymentLogEntry{
 		{
-			ID:        0,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Installing dependencies",
+			Line:      "Installing dependencies",
 		},
 		{
-			ID:        1,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Verify run directory",
+			Line:      "Verify run directory",
 		},
 		{
-			ID:        2,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Executing user command: bash test.sh",
+			Line:      "Executing user command: bash test.sh",
 		},
 		{
-			ID:        3,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Finished",
+			Line:      "Finished",
 		},
 		{
-			ID:        4,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Building functions...",
+			Line:      "Building functions...",
 		},
 		{
-			ID:        5,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Validating asset output directory",
+			Line:      "Validating asset output directory",
 		},
 		{
-			ID:        6,
 			Timestamp: &pagesDeploymentDummyTime,
-			Message:   "Parsed 2 valid header rules.",
+			Line:      "Parsed 2 valid header rules.",
 		},
 	}
 )
@@ -275,6 +251,8 @@ func TestListPagesDeployments(t *testing.T) {
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		assert.Equal(t, "25", r.URL.Query().Get("per_page"))
+		assert.Equal(t, "1", r.URL.Query().Get("page"))
 
 		w.Header().Set("content-type", "application/json")
 		fmt.Fprintf(w, `{
@@ -290,7 +268,7 @@ func TestListPagesDeployments(t *testing.T) {
 				"count": 1,
 				"total_count": 1
 			  }
-		}`, testPagesDeplyomentResponse)
+		}`, testPagesDeploymentResponse)
 	}
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments", handler)
@@ -304,14 +282,71 @@ func TestListPagesDeployments(t *testing.T) {
 		Count:   1,
 		Total:   1,
 	}
-	actual, resultInfo, err := client.ListPagesDeployments(context.Background(), ListPagesDeploymentsParams{
-		AccountID:         testAccountID,
-		ProjectName:       "test",
-		PaginationOptions: PaginationOptions{},
+	actual, resultInfo, err := client.ListPagesDeployments(context.Background(), AccountIdentifier(testAccountID), ListPagesDeploymentsParams{
+		ProjectName: "test",
+		ResultInfo:  ResultInfo{},
 	})
 	if assert.NoError(t, err) {
 		assert.Equal(t, expectedPagesDeployments, actual)
-		assert.Equal(t, expectedResultInfo, resultInfo)
+		assert.Equal(t, &expectedResultInfo, resultInfo)
+	}
+}
+
+func TestListPagesDeploymentsPagination(t *testing.T) {
+	setup()
+	defer teardown()
+	var page1Called, page2Called bool
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		w.Header().Set("content-type", "application/json")
+		switch page {
+		case "1":
+			page1Called = true
+			fmt.Fprintf(w, `{
+				"success": true,
+				"errors": [],
+				"messages": [],
+				"result": [
+					%s
+				],
+				"result_info": {
+					"page": 1,
+					"per_page": 25,
+					"total_count": 26,
+					"total_pages": 2
+				  }
+			}`, testPagesDeploymentResponse)
+		case "2":
+			page2Called = true
+			fmt.Fprintf(w, `{
+				"success": true,
+				"errors": [],
+				"messages": [],
+				"result": [
+					%s
+				],
+				"result_info": {
+					"page": 2,
+					"per_page": 25,
+					"total_count": 26,
+					"total_pages": 2
+				  }
+			}`, testPagesDeploymentResponse)
+		default:
+			assert.Failf(t, "Unexpected page number", "Expected page 1 or 2, got %s", page)
+			return
+		}
+	}
+	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments", handler)
+	actual, resultInfo, err := client.ListPagesDeployments(context.Background(), AccountIdentifier(testAccountID), ListPagesDeploymentsParams{
+		ProjectName: "test",
+		ResultInfo:  ResultInfo{},
+	})
+	if assert.NoError(t, err) {
+		assert.True(t, page1Called)
+		assert.True(t, page2Called)
+		assert.Equal(t, 2, len(actual))
+		assert.Equal(t, 26, resultInfo.Total)
 	}
 }
 
@@ -328,22 +363,18 @@ func TestGetPagesDeploymentInfo(t *testing.T) {
 			"errors": [],
 			"messages": [],
 			"result": %s
-		}`, testPagesDeplyomentResponse)
+		}`, testPagesDeploymentResponse)
 	}
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments/0012e50b-fa5d-44db-8cb5-1f372785dcbe", handler)
 
-	actual, err := client.GetPagesDeploymentInfo(context.Background(), GetPagesDeploymentInfoParams{
-		AccountID:    testAccountID,
-		ProjectName:  "test",
-		DeploymentID: "0012e50b-fa5d-44db-8cb5-1f372785dcbe",
-	})
+	actual, err := client.GetPagesDeploymentInfo(context.Background(), AccountIdentifier(testAccountID), "test", "0012e50b-fa5d-44db-8cb5-1f372785dcbe")
 	if assert.NoError(t, err) {
 		assert.Equal(t, *expectedPagesDeployment, actual)
 	}
 }
 
-func TestGetPagesDeploymentStageLogs(t *testing.T) {
+func TestGetPagesDeploymentLogs(t *testing.T) {
 	setup()
 	defer teardown()
 
@@ -356,20 +387,18 @@ func TestGetPagesDeploymentStageLogs(t *testing.T) {
 			"errors": [],
 			"messages": [],
 			"result": %s
-		}`, testPagesDeploymentStageLogsResponse)
+		}`, testPagesDeploymentLogsResponse)
 	}
 
-	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments/0012e50b-fa5d-44db-8cb5-1f372785dcbe/history/build/logs", handler)
+	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments/0012e50b-fa5d-44db-8cb5-1f372785dcbe/history/logs", handler)
 
-	actual, err := client.GetPagesDeploymentStageLogs(context.Background(), GetPagesDeploymentStageLogsParams{
-		AccountID:    testAccountID,
+	actual, err := client.GetPagesDeploymentLogs(context.Background(), AccountIdentifier(testAccountID), GetPagesDeploymentLogsParams{
 		ProjectName:  "test",
 		DeploymentID: "0012e50b-fa5d-44db-8cb5-1f372785dcbe",
-		StageName:    "build",
 		SizeOptions:  SizeOptions{},
 	})
 	if assert.NoError(t, err) {
-		assert.Equal(t, *expectedPagesDeploymentStageLogs, actual)
+		assert.Equal(t, *expectedPagesDeploymentLogs, actual)
 	}
 }
 
@@ -379,7 +408,7 @@ func TestDeletePagesDeployment(t *testing.T) {
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method, "Expected method 'DELETE', got %s", r.Method)
-
+		assert.Equal(t, "true", r.URL.Query().Get("force"))
 		w.Header().Set("content-type", "application/json")
 		fmt.Fprintf(w, `{
 			"success": true,
@@ -391,11 +420,7 @@ func TestDeletePagesDeployment(t *testing.T) {
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments/0012e50b-fa5d-44db-8cb5-1f372785dcbe", handler)
 
-	err := client.DeletePagesDeployment(context.Background(), DeletePagesDeploymentParams{
-		AccountID:    testAccountID,
-		ProjectName:  "test",
-		DeploymentID: "0012e50b-fa5d-44db-8cb5-1f372785dcbe",
-	})
+	err := client.DeletePagesDeployment(context.Background(), AccountIdentifier(testAccountID), DeletePagesDeploymentParams{ProjectName: "test", DeploymentID: "0012e50b-fa5d-44db-8cb5-1f372785dcbe", Force: true})
 	assert.NoError(t, err)
 }
 
@@ -412,13 +437,12 @@ func TestCreatePagesDeployment(t *testing.T) {
 			"errors": [],
 			"messages": [],
 			"result": %s
-		}`, testPagesDeplyomentResponse)
+		}`, testPagesDeploymentResponse)
 	}
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments", handler)
 
-	actual, err := client.CreatePagesDeployment(context.Background(), CreatePagesDeploymentParams{
-		AccountID:   testAccountID,
+	actual, err := client.CreatePagesDeployment(context.Background(), AccountIdentifier(testAccountID), CreatePagesDeploymentParams{
 		ProjectName: "test",
 	})
 
@@ -440,16 +464,12 @@ func TestRetryPagesDeployment(t *testing.T) {
 			"errors": [],
 			"messages": [],
 			"result": %s
-		}`, testPagesDeplyomentResponse)
+		}`, testPagesDeploymentResponse)
 	}
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments/0012e50b-fa5d-44db-8cb5-1f372785dcbe/retry", handler)
 
-	actual, err := client.RetryPagesDeployment(context.Background(), RetryPagesDeploymentParams{
-		AccountID:    testAccountID,
-		ProjectName:  "test",
-		DeploymentID: "0012e50b-fa5d-44db-8cb5-1f372785dcbe",
-	})
+	actual, err := client.RetryPagesDeployment(context.Background(), AccountIdentifier(testAccountID), "test", "0012e50b-fa5d-44db-8cb5-1f372785dcbe")
 	if assert.NoError(t, err) {
 		assert.Equal(t, *expectedPagesDeployment, actual)
 	}
@@ -468,16 +488,12 @@ func TestRollbackPagesDeployment(t *testing.T) {
 			"errors": [],
 			"messages": [],
 			"result": %s
-		}`, testPagesDeplyomentResponse)
+		}`, testPagesDeploymentResponse)
 	}
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/test/deployments/0012e50b-fa5d-44db-8cb5-1f372785dcbe/rollback", handler)
 
-	actual, err := client.RollbackPagesDeployment(context.Background(), RollbackPagesDeploymentParams{
-		AccountID:    testAccountID,
-		ProjectName:  "test",
-		DeploymentID: "0012e50b-fa5d-44db-8cb5-1f372785dcbe",
-	})
+	actual, err := client.RollbackPagesDeployment(context.Background(), AccountIdentifier(testAccountID), "test", "0012e50b-fa5d-44db-8cb5-1f372785dcbe")
 	if assert.NoError(t, err) {
 		assert.Equal(t, *expectedPagesDeployment, actual)
 	}

@@ -3,7 +3,7 @@ package cloudflare
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -48,7 +48,7 @@ func TestAccounts(t *testing.T) {
 				"page": 1,
 				"per_page": 20,
 				"count": 1,
-				"total_count": 2000
+				"total_count": 1
 			}
 		}
 		`)
@@ -87,7 +87,7 @@ func TestAccount(t *testing.T) {
 				"page": 1,
 				"per_page": 20,
 				"count": 1,
-				"total_count": 2000
+				"total_count": 1
 			}
 		}
 		`)
@@ -109,7 +109,7 @@ func TestUpdateAccount(t *testing.T) {
 
 	mux.HandleFunc("/accounts/01a7362d577a6c3019a474fd6f485823", func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
-		b, err := ioutil.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
 		defer r.Body.Close()
 
 		if assert.NoError(t, err) {
@@ -183,7 +183,7 @@ func TestCreateAccount(t *testing.T) {
 				"page": 1,
 				"per_page": 20,
 				"count": 1,
-				"total_count": 2000
+				"total_count": 1
 			}
 		}
 		`)

@@ -2,7 +2,7 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,8 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
+
 	"golang.org/x/net/idna"
+)
+
+var (
+	// ErrMissingSettingName is for when setting name is required but missing.
+	ErrMissingSettingName = errors.New("zone setting name required but missing")
 )
 
 // Owner describes the resource owner.
@@ -300,6 +306,17 @@ type zoneSubscriptionRatePlanPayload struct {
 	} `json:"rate_plan"`
 }
 
+type GetZoneSettingParams struct {
+	Name       string `json:"-"`
+	PathPrefix string `json:"-"`
+}
+
+type UpdateZoneSettingParams struct {
+	Name       string      `json:"-"`
+	PathPrefix string      `json:"-"`
+	Value      interface{} `json:"value"`
+}
+
 // CreateZone creates a zone on an account.
 //
 // Setting jumpstart to true will attempt to automatically scan for existing
@@ -331,7 +348,7 @@ func (api *API) CreateZone(ctx context.Context, name string, jumpstart bool, acc
 	var r ZoneResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return Zone{}, errors.Wrap(err, errUnmarshalError)
+		return Zone{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -347,7 +364,7 @@ func (api *API) ZoneActivationCheck(ctx context.Context, zoneID string) (Respons
 	var r Response
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return Response{}, errors.Wrap(err, errUnmarshalError)
+		return Response{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r, nil
 }
@@ -371,7 +388,7 @@ func (api *API) ListZones(ctx context.Context, z ...string) ([]Zone, error) {
 			}
 			err = json.Unmarshal(res, &r)
 			if err != nil {
-				return []Zone{}, errors.Wrap(err, errUnmarshalError)
+				return []Zone{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 			}
 			if !r.Success {
 				// TODO: Provide an actual error message instead of always returning nil
@@ -450,7 +467,7 @@ func (api *API) ListZonesContext(ctx context.Context, opts ...ReqOption) (r Zone
 	}
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZonesResponse{}, errors.Wrap(err, errUnmarshalError)
+		return ZonesResponse{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	// avoid overhead in most common cases where the total #zones <= 50
@@ -513,7 +530,7 @@ func (api *API) ZoneDetails(ctx context.Context, zoneID string) (Zone, error) {
 	var r ZoneResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return Zone{}, errors.Wrap(err, errUnmarshalError)
+		return Zone{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -618,7 +635,7 @@ func (api *API) EditZone(ctx context.Context, zoneID string, zoneOpts ZoneOption
 	var r ZoneResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return Zone{}, errors.Wrap(err, errUnmarshalError)
+		return Zone{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return r.Result, nil
@@ -639,7 +656,7 @@ func (api *API) PurgeEverything(ctx context.Context, zoneID string) (PurgeCacheR
 	var r PurgeCacheResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return PurgeCacheResponse{}, errors.Wrap(err, errUnmarshalError)
+		return PurgeCacheResponse{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r, nil
 }
@@ -655,15 +672,22 @@ func (api *API) PurgeCache(ctx context.Context, zoneID string, pcr PurgeCacheReq
 //
 // API reference: https://api.cloudflare.com/#zone-purge-individual-files-by-url-and-cache-tags
 func (api *API) PurgeCacheContext(ctx context.Context, zoneID string, pcr PurgeCacheRequest) (PurgeCacheResponse, error) {
+	// manually build the payload to ensure we don't escape HTML entities to
+	// match their keys for purging.
+	payload, err := json.MarshalWithOption(pcr, json.DisableHTMLEscape())
+	if err != nil {
+		return PurgeCacheResponse{}, err
+	}
+
 	uri := fmt.Sprintf("/zones/%s/purge_cache", zoneID)
-	res, err := api.makeRequestContext(ctx, http.MethodPost, uri, pcr)
+	res, err := api.makeRequestContext(ctx, http.MethodPost, uri, payload)
 	if err != nil {
 		return PurgeCacheResponse{}, err
 	}
 	var r PurgeCacheResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return PurgeCacheResponse{}, errors.Wrap(err, errUnmarshalError)
+		return PurgeCacheResponse{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r, nil
 }
@@ -679,7 +703,7 @@ func (api *API) DeleteZone(ctx context.Context, zoneID string) (ZoneID, error) {
 	var r ZoneIDResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZoneID{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneID{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -696,7 +720,7 @@ func (api *API) AvailableZoneRatePlans(ctx context.Context, zoneID string) ([]Zo
 	var r AvailableZoneRatePlansResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return []ZoneRatePlan{}, errors.Wrap(err, errUnmarshalError)
+		return []ZoneRatePlan{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -713,7 +737,7 @@ func (api *API) AvailableZonePlans(ctx context.Context, zoneID string) ([]ZonePl
 	var r AvailableZonePlansResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return []ZonePlan{}, errors.Wrap(err, errUnmarshalError)
+		return []ZonePlan{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -722,10 +746,10 @@ func (api *API) AvailableZonePlans(ctx context.Context, zoneID string) ([]ZonePl
 func (o ZoneAnalyticsOptions) encode() string {
 	v := url.Values{}
 	if o.Since != nil {
-		v.Set("since", (*o.Since).Format(time.RFC3339))
+		v.Set("since", o.Since.Format(time.RFC3339))
 	}
 	if o.Until != nil {
-		v.Set("until", (*o.Until).Format(time.RFC3339))
+		v.Set("until", o.Until.Format(time.RFC3339))
 	}
 	if o.Continuous != nil {
 		v.Set("continuous", fmt.Sprintf("%t", *o.Continuous))
@@ -745,7 +769,7 @@ func (api *API) ZoneAnalyticsDashboard(ctx context.Context, zoneID string, optio
 	var r zoneAnalyticsDataResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZoneAnalyticsData{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneAnalyticsData{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -762,7 +786,7 @@ func (api *API) ZoneAnalyticsByColocation(ctx context.Context, zoneID string, op
 	var r zoneAnalyticsColocationResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return nil, errors.Wrap(err, errUnmarshalError)
+		return nil, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -780,7 +804,7 @@ func (api *API) ZoneSettings(ctx context.Context, zoneID string) (*ZoneSettingRe
 	response := &ZoneSettingResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return nil, errors.Wrap(err, errUnmarshalError)
+		return nil, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response, nil
@@ -801,7 +825,7 @@ func (api *API) UpdateZoneSettings(ctx context.Context, zoneID string, settings 
 	response := &ZoneSettingResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return nil, errors.Wrap(err, errUnmarshalError)
+		return nil, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response, nil
@@ -819,7 +843,7 @@ func (api *API) ZoneSSLSettings(ctx context.Context, zoneID string) (ZoneSSLSett
 	var r ZoneSSLSettingResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZoneSSLSetting{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneSSLSetting{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -836,7 +860,7 @@ func (api *API) UpdateZoneSSLSettings(ctx context.Context, zoneID string, sslVal
 	var r ZoneSSLSettingResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZoneSSLSetting{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneSSLSetting{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -854,7 +878,7 @@ func (api *API) FallbackOrigin(ctx context.Context, zoneID string) (FallbackOrig
 	var r FallbackOriginResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return FallbackOrigin{}, errors.Wrap(err, errUnmarshalError)
+		return FallbackOrigin{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return r.Result, nil
@@ -873,7 +897,7 @@ func (api *API) UpdateFallbackOrigin(ctx context.Context, zoneID string, fbo Fal
 	response := &FallbackOriginResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return nil, errors.Wrap(err, errUnmarshalError)
+		return nil, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response, nil
@@ -897,11 +921,25 @@ func normalizeZoneName(name string) string {
 	return name
 }
 
-// ZoneSingleSetting returns information about specified setting to the specified zone.
+// GetZoneSetting returns information about specified setting to the specified
+// zone.
 //
 // API reference: https://api.cloudflare.com/#zone-settings-get-all-zone-settings
-func (api *API) ZoneSingleSetting(ctx context.Context, zoneID, settingName string) (ZoneSetting, error) {
-	uri := fmt.Sprintf("/zones/%s/settings/%s", zoneID, settingName)
+func (api *API) GetZoneSetting(ctx context.Context, rc *ResourceContainer, params GetZoneSettingParams) (ZoneSetting, error) {
+	if rc.Level != ZoneRouteLevel {
+		return ZoneSetting{}, ErrRequiredZoneLevelResourceContainer
+	}
+
+	if rc.Identifier == "" {
+		return ZoneSetting{}, ErrMissingName
+	}
+
+	pathPrefix := "settings"
+	if params.PathPrefix != "" {
+		pathPrefix = params.PathPrefix
+	}
+
+	uri := fmt.Sprintf("/zones/%s/%s/%s", rc.Identifier, pathPrefix, params.Name)
 	res, err := api.makeRequestContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
 		return ZoneSetting{}, err
@@ -909,28 +947,41 @@ func (api *API) ZoneSingleSetting(ctx context.Context, zoneID, settingName strin
 	var r ZoneSettingSingleResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZoneSetting{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneSetting{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
 
-// UpdateZoneSingleSetting updates the specified setting for a given zone.
+// UpdateZoneSetting updates the specified setting for a given zone.
 //
 // API reference: https://api.cloudflare.com/#zone-settings-edit-zone-settings-info
-func (api *API) UpdateZoneSingleSetting(ctx context.Context, zoneID, settingName string, setting ZoneSetting) (*ZoneSettingSingleResponse, error) {
-	uri := fmt.Sprintf("/zones/%s/settings/%s", zoneID, settingName)
-	res, err := api.makeRequestContext(ctx, http.MethodPatch, uri, setting)
+func (api *API) UpdateZoneSetting(ctx context.Context, rc *ResourceContainer, params UpdateZoneSettingParams) (ZoneSetting, error) {
+	if rc.Level != ZoneRouteLevel {
+		return ZoneSetting{}, ErrRequiredZoneLevelResourceContainer
+	}
+
+	if rc.Identifier == "" {
+		return ZoneSetting{}, ErrMissingName
+	}
+
+	pathPrefix := "settings"
+	if params.PathPrefix != "" {
+		pathPrefix = params.PathPrefix
+	}
+
+	uri := fmt.Sprintf("/zones/%s/%s/%s", rc.Identifier, pathPrefix, params.Name)
+	res, err := api.makeRequestContext(ctx, http.MethodPatch, uri, params)
 	if err != nil {
-		return nil, err
+		return ZoneSetting{}, err
 	}
 
 	response := &ZoneSettingSingleResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return nil, errors.Wrap(err, errUnmarshalError)
+		return ZoneSetting{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
-	return response, nil
+	return response.Result, nil
 }
 
 // ZoneExport returns the text BIND config for the given zone
@@ -976,7 +1027,7 @@ func (api *API) ZoneDNSSECSetting(ctx context.Context, zoneID string) (ZoneDNSSE
 	response := ZoneDNSSECResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return ZoneDNSSEC{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneDNSSEC{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response.Result, nil
@@ -999,7 +1050,7 @@ func (api *API) DeleteZoneDNSSEC(ctx context.Context, zoneID string) (string, er
 	response := ZoneDNSSECDeleteResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return "", errors.Wrap(err, errUnmarshalError)
+		return "", fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return response.Result, nil
 }
@@ -1020,7 +1071,7 @@ func (api *API) UpdateZoneDNSSEC(ctx context.Context, zoneID string, options Zon
 	response := ZoneDNSSECResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return ZoneDNSSEC{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneDNSSEC{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return response.Result, nil
 }

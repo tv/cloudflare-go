@@ -13,6 +13,7 @@ import (
 
 var waitingRoomID = "699d98642c564d2e855e9661899b7252"
 var waitingRoomEventID = "25756b2dfe6e378a06b033b670413757"
+var waitingRoomRuleID = "25756b2dfe6e378a06b033b670413757"
 var testTimestampWaitingRoom = time.Now().UTC()
 var testTimestampWaitingRoomEvent = time.Now().UTC()
 var testTimestampWaitingRoomEventPrequeue = time.Now().UTC()
@@ -25,6 +26,7 @@ var waitingRoomJSON = fmt.Sprintf(`
       "modified_on": "%s",
       "name": "production_webinar",
       "description": "Production - DO NOT MODIFY",
+      "queueing_method": "random",
       "suspended": false,
       "host": "shop.example.com",
       "path": "/shop/checkout",
@@ -37,7 +39,10 @@ var waitingRoomJSON = fmt.Sprintf(`
       "custom_page_html": "{{#waitTimeKnown}} {{waitTime}} mins {{/waitTimeKnown}} {{^waitTimeKnown}} Queue all enabled {{/waitTimeKnown}}",
       "default_template_language": "en-US",
       "next_event_prequeue_start_time": null,
-      "next_event_start_time": "%s"
+      "next_event_start_time": "%s",
+	  "cookie_suffix": "example_shop",
+	  "additional_routes": [{"host": "shop2.example.com", "path": "/shop/checkout"}],
+	  "queueing_status_code": 200
     }
    `, waitingRoomID, testTimestampWaitingRoom.Format(time.RFC3339Nano), testTimestampWaitingRoom.Format(time.RFC3339Nano),
 	testTimestampWaitingRoomEventStart.Format(time.RFC3339Nano))
@@ -77,11 +82,29 @@ var waitingRoomStatusJSON = fmt.Sprintf(`
     }
    `, waitingRoomEventID)
 
+var waitingRoomRuleJSON = fmt.Sprintf(`
+{
+  "id": "%s",
+  "version": "1",
+  "description": "bypass ip",
+  "action": "bypass_waiting_room",
+  "expression": "ip.src in {1.2.3.4 5.6.7.8}",
+  "enabled": true,
+  "last_updated": "%s"
+}
+`, waitingRoomRuleID, testTimestampWaitingRoom.Format(time.RFC3339Nano))
+
 var waitingRoomPagePreviewJSON = `
     {
       "preview_url": "http://waitingrooms.dev/preview/35af8c12-6d68-4608-babb-b53435a5ddfb"
     }
     `
+
+var waitingRoomSettingsJSON = `
+    {
+      "search_engine_crawler_bypass": true
+    }
+   `
 
 var waitingRoom = WaitingRoom{
 	ID:                         waitingRoomID,
@@ -89,6 +112,7 @@ var waitingRoom = WaitingRoom{
 	ModifiedOn:                 testTimestampWaitingRoom,
 	Name:                       "production_webinar",
 	Description:                "Production - DO NOT MODIFY",
+	QueueingMethod:             "random",
 	Suspended:                  false,
 	Host:                       "shop.example.com",
 	Path:                       "/shop/checkout",
@@ -102,6 +126,9 @@ var waitingRoom = WaitingRoom{
 	DefaultTemplateLanguage:    "en-US",
 	NextEventStartTime:         &testTimestampWaitingRoomEventStart,
 	NextEventPrequeueStartTime: nil,
+	CookieSuffix:               "example_shop",
+	AdditionalRoutes:           []*WaitingRoomRoute{{Host: "shop2.example.com", Path: "/shop/checkout"}},
+	QueueingStatusCode:         200,
 }
 
 var waitingRoomEvent = WaitingRoomEvent{
@@ -133,6 +160,28 @@ var waitingRoomStatus = WaitingRoomStatus{
 
 var waitingRoomPagePreview = WaitingRoomPagePreviewURL{
 	PreviewURL: "http://waitingrooms.dev/preview/35af8c12-6d68-4608-babb-b53435a5ddfb",
+}
+
+var waitingRoomRule = WaitingRoomRule{
+	ID:          waitingRoomRuleID,
+	Version:     "1",
+	Action:      "bypass_waiting_room",
+	Expression:  "ip.src in {1.2.3.4 5.6.7.8}",
+	Description: "bypass ip",
+	Enabled:     BoolPtr(true),
+	LastUpdated: &testTimestampWaitingRoom,
+}
+
+var waitingRoomSettings = WaitingRoomSettings{
+	SearchEngineCrawlerBypass: true,
+}
+
+var waitingRoomSettingsUpdate = UpdateWaitingRoomSettingsParams{
+	SearchEngineCrawlerBypass: BoolPtr(true),
+}
+
+var waitingRoomSettingsPatch = PatchWaitingRoomSettingsParams{
+	SearchEngineCrawlerBypass: BoolPtr(true),
 }
 
 func TestListWaitingRooms(t *testing.T) {
@@ -614,4 +663,224 @@ func TestDeleteWaitingRoomEvent(t *testing.T) {
 
 	err := client.DeleteWaitingRoomEvent(context.Background(), testZoneID, "699d98642c564d2e855e9661899b7252", "25756b2dfe6e378a06b033b670413757")
 	assert.NoError(t, err)
+}
+
+func TestListWaitingRoomRules(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": [
+			    %s
+			  ]
+			}
+		`, waitingRoomRuleJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/699d98642c564d2e855e9661899b7252/rules", handler)
+	want := []WaitingRoomRule{waitingRoomRule}
+
+	actual, err := client.ListWaitingRoomRules(context.Background(), ZoneIdentifier(testZoneID), ListWaitingRoomRuleParams{WaitingRoomID: "699d98642c564d2e855e9661899b7252"})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestCreateWaitingRoomRule(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": [
+			    %s
+			  ]
+			}
+		`, waitingRoomRuleJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/699d98642c564d2e855e9661899b7252/rules", handler)
+	want := []WaitingRoomRule{waitingRoomRule}
+
+	actual, err := client.CreateWaitingRoomRule(context.Background(), ZoneIdentifier(testZoneID), CreateWaitingRoomRuleParams{
+		WaitingRoomID: "699d98642c564d2e855e9661899b7252",
+		Rule:          waitingRoomRule,
+	})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestUpdateWaitingRoomRule(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method, "Expected method 'PATCH', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": [
+			    %s
+			  ]
+			}
+		`, waitingRoomRuleJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/699d98642c564d2e855e9661899b7252/rules/"+waitingRoomRuleID, handler)
+	want := []WaitingRoomRule{waitingRoomRule}
+
+	actual, err := client.UpdateWaitingRoomRule(context.Background(), ZoneIdentifier(testZoneID), UpdateWaitingRoomRuleParams{
+		WaitingRoomID: "699d98642c564d2e855e9661899b7252",
+		Rule:          waitingRoomRule,
+	})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestDeleteWaitingRoomRule(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method, "Expected method 'DELETE', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": []
+			}
+		`)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/699d98642c564d2e855e9661899b7252/rules/"+waitingRoomRuleID, handler)
+	want := []WaitingRoomRule{}
+
+	actual, err := client.DeleteWaitingRoomRule(context.Background(), ZoneIdentifier(testZoneID), DeleteWaitingRoomRuleParams{
+		WaitingRoomID: "699d98642c564d2e855e9661899b7252",
+		RuleID:        waitingRoomRuleID,
+	})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestReplaceWaitingRoomRules(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": [
+			    %s
+			  ]
+			}
+		`, waitingRoomRuleJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/699d98642c564d2e855e9661899b7252/rules", handler)
+	want := []WaitingRoomRule{waitingRoomRule}
+
+	actual, err := client.ReplaceWaitingRoomRules(context.Background(), ZoneIdentifier(testZoneID), ReplaceWaitingRoomRuleParams{
+		WaitingRoomID: "699d98642c564d2e855e9661899b7252",
+		Rules:         want,
+	})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestWaitingRoomSettings(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": %s
+			}
+		`, waitingRoomSettingsJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/settings", handler)
+	want := waitingRoomSettings
+
+	actual, err := client.GetWaitingRoomSettings(context.Background(), ZoneIdentifier(testZoneID))
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestUpdateWaitingRoomSettings(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": %s
+			}
+		`, waitingRoomSettingsJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/settings", handler)
+	want := waitingRoomSettings
+
+	actual, err := client.UpdateWaitingRoomSettings(context.Background(), ZoneIdentifier(testZoneID), waitingRoomSettingsUpdate)
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestChangeWaitingRoomSettings(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method, "Expected method 'PATCH', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprintf(w, `{
+			  "success": true,
+			  "errors": [],
+			  "messages": [],
+			  "result": %s
+			}
+		`, waitingRoomSettingsJSON)
+	}
+
+	mux.HandleFunc("/zones/"+testZoneID+"/waiting_rooms/settings", handler)
+	want := waitingRoomSettings
+
+	actual, err := client.PatchWaitingRoomSettings(context.Background(), ZoneIdentifier(testZoneID), waitingRoomSettingsPatch)
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
 }

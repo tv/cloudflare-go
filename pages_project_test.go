@@ -21,6 +21,7 @@ const (
           "testdomain.com",
           "testdomain.org"
         ],
+		"production_branch": "main",
         "source": {
           "type": "github",
           "config": {
@@ -28,7 +29,18 @@ const (
             "repo_name": "pages-test",
             "production_branch": "main",
             "pr_comments_enabled": true,
-            "deployments_enabled": true
+            "deployments_enabled": true,
+			"preview_deployment_setting": "custom",
+			"preview_branch_includes": [
+				"release/*",
+				"production",
+				"main"
+			],
+			"preview_branch_excludes": [
+				"dependabot/*",
+				"dev",
+				"*/ignore"
+			]
           }
         },
         "build_config": {
@@ -46,8 +58,14 @@ const (
               },
               "ENV": {
                 "value": "preview"
-              }
-            }
+              },
+			  "API_KEY": {
+				"value": "",
+				"type": "secret_text"
+			  }
+            },
+			"compatibility_date": "2022-08-15",
+			"compatibility_flags": ["preview_flag"]
           },
           "production": {
             "env_vars": {
@@ -56,8 +74,46 @@ const (
               },
               "ENV": {
                 "value": "production"
-              }
-            }
+              },
+			  "API_KEY": {
+				"value": "",
+				"type": "secret_text"
+			  }
+            },
+			"d1_databases": {
+				"D1_BINDING": {
+					"id": "a94509c6-0757-43f3-b053-474b0ab10935"
+				}
+			},
+			"kv_namespaces": {
+				"KV_BINDING": {
+				  "namespace_id": "5eb63bbbe01eeed093cb22bb8f5acdc3"
+				}
+			},
+		  	"durable_object_namespaces": {
+				"DO_BINDING": {
+			  		"namespace_id": "5eb63bbbe01eeed093cb22bb8f5acdc3"
+				}
+		  	},
+			"r2_buckets": {
+				"R2_BINDING": {
+					"name": "some-bucket"
+				}
+			},
+			"services": {
+				"SERVICE_BINDING": {
+					"service": "some-worker",
+					"environment": "production"
+				}
+			},
+			"compatibility_date": "2022-08-15",
+			"compatibility_flags": ["production_flag"],
+			"fail_open": false,
+			"always_use_latest_compatibility_date": false,
+			"usage_model": "bundled",
+			"placement": {
+				"mode": "smart"
+			}
           }
         },
         "latest_deployment": {
@@ -66,6 +122,7 @@ const (
           "project_id": "5a321fc7-3162-7d36-adce-1213996a7",
           "project_name": "pages-test",
           "environment": "preview",
+		  "production_branch": "main",
           "url": "https://c35216d1.pages-test.pages.dev",
           "created_on": "2021-03-09T00:55:03.923456Z",
           "modified_on": "2021-03-09T00:58:59.045655Z",
@@ -84,8 +141,20 @@ const (
             },
             "ENV": {
               "value": "STAGING"
-            }
+            },
+			"API_KEY": {
+			  "value": "",
+			  "type": "secret_text"
+			}
           },
+		  "placement": {
+			"mode": "smart"
+		  },
+		  "compatibility_date": "2022-08-15",
+		  "compatibility_flags": ["deployment_flag"],
+		  "fail_open": false,
+		  "always_use_latest_compatibility_date": false,
+		  "usage_model": "bundled",
           "deployment_trigger": {
             "type": "ad_hoc",
             "metadata": {
@@ -122,7 +191,18 @@ const (
               "repo_name": "pages-test",
               "production_branch": "main",
               "pr_comments_enabled": true,
-              "deployments_enabled": true
+              "deployments_enabled": true,
+			  "preview_deployment_setting": "custom",
+			  "preview_branch_includes": [
+				"release/*",
+				"production",
+				"main"
+			  ],
+			  "preview_branch_excludes": [
+				"dependabot/*",
+				"dev",
+				"*/ignore"
+			  ]
             }
           }
         },
@@ -135,6 +215,7 @@ const (
           "url": "https://c35216d1.pages-test.pages.dev",
           "created_on": "2021-03-09T00:55:03.923456Z",
           "modified_on": "2021-03-09T00:58:59.045655Z",
+		  "production_branch": "main",
           "aliases": [
             "https://branchname.pages-test.pages.dev"
           ],
@@ -150,8 +231,21 @@ const (
             },
             "ENV": {
               "value": "STAGING"
-            }
+            },
+			"API_KEY": {
+			  "value": "",
+			  "type": "secret_text"
+			}
           },
+		  "placement": {
+			"mode": "smart"
+		  },
+		  "compatibility_date": "2022-08-15",
+		  "compatibility_flags": ["deployment_flag"],
+		  "fail_open": false,
+		  "always_use_latest_compatibility_date": false,
+		  "build_image_major_version": 1,
+		  "usage_model": "bundled",
           "deployment_trigger": {
             "type": "ad_hoc",
             "metadata": {
@@ -188,7 +282,18 @@ const (
               "repo_name": "pages-test",
               "production_branch": "main",
               "pr_comments_enabled": true,
-              "deployments_enabled": true
+              "deployments_enabled": true,
+			  "preview_deployment_setting": "custom",
+			  "preview_branch_includes": [
+				"release/*",
+				"production",
+				"main"
+			  ],
+			  "preview_branch_excludes": [
+				"dependabot/*",
+				"dev",
+				"*/ignore"
+			  ]
             }
           }
         }
@@ -209,9 +314,10 @@ var (
 		BuildConfig:         *expectedPagesProjectBuildConfig,
 		CreatedOn:           &pagesProjectCreatedOn,
 		DeploymentConfigs:   *expectedPagesProjectDeploymentConfigs,
-		Source:              *expectedPagesProjectSource,
+		Source:              expectedPagesProjectSource,
 		ID:                  "5a321fc7-3162-7d36-adce-1213996a7",
 		LatestDeployment:    *expectedPagesProjectDeployment,
+		ProductionBranch:    "main",
 	}
 
 	deploymentCreatedOn, _  = time.Parse(time.RFC3339, "2021-03-09T00:55:03.923456Z")
@@ -230,18 +336,29 @@ var (
 			"https://branchname.pages-test.pages.dev",
 		},
 		LatestStage: *expectedPagesProjectLatestDeploymentStage,
-		EnvVars: map[string]map[string]string{
-			"BUILD_VERSION": {
-				"value": "1.2",
+		EnvVars: EnvironmentVariableMap{
+			"BUILD_VERSION": &EnvironmentVariable{
+				Value: "1.2",
 			},
-			"ENV": {
-				"value": "STAGING",
+			"ENV": &EnvironmentVariable{
+				Value: "STAGING",
+			},
+			"API_KEY": &EnvironmentVariable{
+				Value: "",
+				Type:  SecretText,
 			},
 		},
-		DeploymentTrigger: *expectedPagesProjectDeploymentTrigger,
-		Stages:            expectedStages,
-		BuildConfig:       *expectedPagesProjectBuildConfig,
-		Source:            *expectedPagesProjectSource,
+		Placement: &Placement{
+			Mode: PlacementModeSmart,
+		},
+		CompatibilityFlags: []string{"deployment_flag"},
+		CompatibilityDate:  "2022-08-15",
+		UsageModel:         Bundled,
+		DeploymentTrigger:  *expectedPagesProjectDeploymentTrigger,
+		Stages:             expectedStages,
+		BuildConfig:        *expectedPagesProjectBuildConfig,
+		Source:             *expectedPagesProjectSource,
+		ProductionBranch:   "main",
 	}
 
 	latestDeploymentStageStartedOn, _ = time.Parse(time.RFC3339, "2021-03-09T00:55:03.923456Z")
@@ -295,24 +412,60 @@ var (
 	}
 
 	expectedPagesProjectDeploymentConfigPreview = &PagesProjectDeploymentConfigEnvironment{
-		EnvVars: map[string]PagesProjectDeploymentVar{
-			"BUILD_VERSION": {
+		EnvVars: EnvironmentVariableMap{
+			"BUILD_VERSION": &EnvironmentVariable{
 				Value: "1.2",
 			},
-			"ENV": {
+			"ENV": &EnvironmentVariable{
 				Value: "preview",
 			},
+			"API_KEY": &EnvironmentVariable{
+				Value: "",
+				Type:  SecretText,
+			},
 		},
+		CompatibilityDate:  "2022-08-15",
+		CompatibilityFlags: []string{"preview_flag"},
 	}
 
 	expectedPagesProjectDeploymentConfigProduction = &PagesProjectDeploymentConfigEnvironment{
-		EnvVars: map[string]PagesProjectDeploymentVar{
-			"BUILD_VERSION": {
+		EnvVars: EnvironmentVariableMap{
+			"BUILD_VERSION": &EnvironmentVariable{
 				Value: "1.2",
 			},
-			"ENV": {
+			"ENV": &EnvironmentVariable{
 				Value: "production",
 			},
+			"API_KEY": &EnvironmentVariable{
+				Value: "",
+				Type:  SecretText,
+			},
+		},
+		KvNamespaces: NamespaceBindingMap{
+			"KV_BINDING": &NamespaceBindingValue{Value: "5eb63bbbe01eeed093cb22bb8f5acdc3"},
+		},
+		D1Databases: D1BindingMap{
+			"D1_BINDING": &D1Binding{ID: "a94509c6-0757-43f3-b053-474b0ab10935"},
+		},
+		DoNamespaces: NamespaceBindingMap{
+			"DO_BINDING": &NamespaceBindingValue{Value: "5eb63bbbe01eeed093cb22bb8f5acdc3"},
+		},
+		R2Bindings: R2BindingMap{
+			"R2_BINDING": &R2BindingValue{Name: "some-bucket"},
+		},
+		ServiceBindings: ServiceBindingMap{
+			"SERVICE_BINDING": &ServiceBinding{
+				Service:     "some-worker",
+				Environment: "production",
+			},
+		},
+		CompatibilityDate:                "2022-08-15",
+		CompatibilityFlags:               []string{"production_flag"},
+		FailOpen:                         false,
+		AlwaysUseLatestCompatibilityDate: false,
+		UsageModel:                       Bundled,
+		Placement: &Placement{
+			Mode: PlacementModeSmart,
 		},
 	}
 
@@ -322,11 +475,14 @@ var (
 	}
 
 	expectedPagesProjectSourceConfig = &PagesProjectSourceConfig{
-		Owner:              "cloudflare",
-		RepoName:           "pages-test",
-		ProductionBranch:   "main",
-		PRCommentsEnabled:  true,
-		DeploymentsEnabled: true,
+		Owner:                    "cloudflare",
+		RepoName:                 "pages-test",
+		ProductionBranch:         "main",
+		PRCommentsEnabled:        true,
+		DeploymentsEnabled:       true,
+		PreviewDeploymentSetting: PagesPreviewCustomBranches,
+		PreviewBranchIncludes:    []string{"release/*", "production", "main"},
+		PreviewBranchExcludes:    []string{"dependabot/*", "dev", "*/ignore"},
 	}
 )
 
@@ -365,7 +521,13 @@ func TestListPagesProjects(t *testing.T) {
 		Count:   1,
 		Total:   1,
 	}
-	actual, resultInfo, err := client.ListPagesProjects(context.Background(), testAccountID, PaginationOptions{})
+
+	_, _, err := client.ListPagesProjects(context.Background(), AccountIdentifier(""), ListPagesProjectsParams{})
+	if assert.Error(t, err) {
+		assert.Equal(t, err.Error(), errMissingAccountID)
+	}
+
+	actual, resultInfo, err := client.ListPagesProjects(context.Background(), AccountIdentifier(testAccountID), ListPagesProjectsParams{})
 	if assert.NoError(t, err) {
 		assert.Equal(t, expectedPagesProjects, actual)
 		assert.Equal(t, expectedResultInfo, resultInfo)
@@ -390,7 +552,12 @@ func TestPagesProject(t *testing.T) {
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/Test Pages Project", handler)
 
-	actual, err := client.PagesProject(context.Background(), testAccountID, "Test Pages Project")
+	_, err := client.GetPagesProject(context.Background(), AccountIdentifier(""), "Test Pages Project")
+	if assert.Error(t, err) {
+		assert.Equal(t, err.Error(), errMissingAccountID)
+	}
+
+	actual, err := client.GetPagesProject(context.Background(), AccountIdentifier(testAccountID), "Test Pages Project")
 	if assert.NoError(t, err) {
 		assert.Equal(t, *expectedPagesProject, actual)
 	}
@@ -414,7 +581,26 @@ func TestCreatePagesProject(t *testing.T) {
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects", handler)
 
-	actual, err := client.CreatePagesProject(context.Background(), testAccountID, *expectedPagesProject)
+	params := &CreatePagesProjectParams{
+		SubDomain: "test.pages.dev",
+		Name:      "Test Pages Project",
+		Domains: []string{
+			"testdomain.com",
+			"testdomain.org",
+		},
+		CanonicalDeployment: *expectedPagesProjectDeployment,
+		BuildConfig:         *expectedPagesProjectBuildConfig,
+		DeploymentConfigs:   *expectedPagesProjectDeploymentConfigs,
+		Source:              expectedPagesProjectSource,
+		LatestDeployment:    *expectedPagesProjectDeployment,
+		ProductionBranch:    "main",
+	}
+	_, err := client.CreatePagesProject(context.Background(), AccountIdentifier(""), *params)
+	if assert.Error(t, err) {
+		assert.Equal(t, err.Error(), errMissingAccountID)
+	}
+
+	actual, err := client.CreatePagesProject(context.Background(), AccountIdentifier(testAccountID), *params)
 	if assert.NoError(t, err) {
 		assert.Equal(t, *expectedPagesProject, actual)
 	}
@@ -424,7 +610,8 @@ func TestUpdatePagesProject(t *testing.T) {
 	setup()
 	defer teardown()
 
-	updateAttributes := &PagesProject{
+	updateAttributes := &UpdatePagesProjectParams{
+		ID:   "Test Pages Project",
 		Name: "updated-project-name",
 	}
 
@@ -442,9 +629,12 @@ func TestUpdatePagesProject(t *testing.T) {
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/Test Pages Project", handler)
 
-	_, err := client.UpdatePagesProject(context.Background(), testAccountID, "Test Pages Project", *updateAttributes)
+	_, err := client.UpdatePagesProject(context.Background(), AccountIdentifier(""), *updateAttributes)
+	if assert.Error(t, err) {
+		assert.Equal(t, err.Error(), errMissingAccountID)
+	}
 
-	t.Log(err)
+	_, err = client.UpdatePagesProject(context.Background(), AccountIdentifier(testAccountID), *updateAttributes)
 
 	assert.NoError(t, err)
 }
@@ -467,6 +657,11 @@ func TestDeletePagesProject(t *testing.T) {
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/pages/projects/Test Pages Project", handler)
 
-	err := client.DeletePagesProject(context.Background(), testAccountID, "Test Pages Project")
+	err := client.DeletePagesProject(context.Background(), AccountIdentifier(""), "Test Pages Project")
+	if assert.Error(t, err) {
+		assert.Equal(t, err.Error(), errMissingAccountID)
+	}
+
+	err = client.DeletePagesProject(context.Background(), AccountIdentifier(testAccountID), "Test Pages Project")
 	assert.NoError(t, err)
 }

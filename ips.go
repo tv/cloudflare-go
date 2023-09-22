@@ -1,13 +1,12 @@
 package cloudflare
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
 )
 
 // IPRangesResponse contains the structure for the API response, not modified.
@@ -40,17 +39,17 @@ func IPs() (IPRanges, error) {
 	uri := fmt.Sprintf("%s/ips?china_colo=1", apiURL)
 	resp, err := http.Get(uri) //nolint:gosec
 	if err != nil {
-		return IPRanges{}, errors.Wrap(err, "HTTP request failed")
+		return IPRanges{}, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return IPRanges{}, errors.Wrap(err, "Response body could not be read")
+		return IPRanges{}, fmt.Errorf("Response body could not be read: %w", err)
 	}
 	var r IPsResponse
 	err = json.Unmarshal(body, &r)
 	if err != nil {
-		return IPRanges{}, errors.Wrap(err, errUnmarshalError)
+		return IPRanges{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	var ips IPRanges

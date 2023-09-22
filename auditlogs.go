@@ -2,12 +2,13 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
 // AuditLogAction is a member of AuditLog, the action that was taken.
@@ -59,15 +60,16 @@ type AuditLogResponse struct {
 
 // AuditLogFilter is an object for filtering the audit log response from the api.
 type AuditLogFilter struct {
-	ID         string
-	ActorIP    string
-	ActorEmail string
-	Direction  string
-	ZoneName   string
-	Since      string
-	Before     string
-	PerPage    int
-	Page       int
+	ID           string
+	ActorIP      string
+	ActorEmail   string
+	HideUserLogs bool
+	Direction    string
+	ZoneName     string
+	Since        string
+	Before       string
+	PerPage      int
+	Page         int
 }
 
 // ToQuery turns an audit log filter in to an HTTP Query Param
@@ -84,6 +86,9 @@ func (a AuditLogFilter) ToQuery() url.Values {
 	}
 	if a.ActorEmail != "" {
 		v.Add("actor.email", a.ActorEmail)
+	}
+	if a.HideUserLogs {
+		v.Add("hide_user_logs", "true")
 	}
 	if a.ZoneName != "" {
 		v.Add("zone.name", a.ZoneName)

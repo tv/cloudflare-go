@@ -34,6 +34,7 @@ func dnsCreate(c *cli.Context) error {
 	content := c.String("content")
 	ttl := c.Int("ttl")
 	proxy := c.Bool("proxy")
+	priority := uint16(c.Uint("priority"))
 
 	zoneID, err := api.ZoneIDByName(zone)
 	if err != nil {
@@ -41,21 +42,22 @@ func dnsCreate(c *cli.Context) error {
 		return err
 	}
 
-	record := cloudflare.DNSRecord{
-		Name:    name,
-		Type:    strings.ToUpper(rtype),
-		Content: content,
-		TTL:     ttl,
-		Proxied: &proxy,
+	record := cloudflare.CreateDNSRecordParams{
+		Name:     name,
+		Type:     strings.ToUpper(rtype),
+		Content:  content,
+		TTL:      ttl,
+		Proxied:  &proxy,
+		Priority: &priority,
 	}
-	resp, err := api.CreateDNSRecord(context.Background(), zoneID, record)
+	result, err := api.CreateDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), record)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error creating DNS record: ", err)
 		return err
 	}
 
 	output := [][]string{
-		formatDNSRecord(resp.Result),
+		formatDNSRecord(result),
 	}
 
 	writeTable(c, output, "ID", "Name", "Type", "Content", "TTL", "Proxiable", "Proxy", "Locked")
@@ -74,6 +76,7 @@ func dnsCreateOrUpdate(c *cli.Context) error {
 	content := c.String("content")
 	ttl := c.Int("ttl")
 	proxy := c.Bool("proxy")
+	priority := uint16(c.Uint("priority"))
 
 	zoneID, err := api.ZoneIDByName(zone)
 	if err != nil {
@@ -81,47 +84,47 @@ func dnsCreateOrUpdate(c *cli.Context) error {
 		return err
 	}
 
-	// Look for an existing record
-	rr := cloudflare.DNSRecord{
-		Name: name + "." + zone,
-	}
-	records, err := api.DNSRecords(context.Background(), zoneID, rr)
+	records, _, err := api.ListDNSRecords(context.Background(), cloudflare.ZoneIdentifier(zoneID), cloudflare.ListDNSRecordsParams{Name: name + "." + zone})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error fetching DNS records: ", err)
 		return err
 	}
 
-	var resp *cloudflare.DNSRecordResponse
+	var result cloudflare.DNSRecord
 	if len(records) > 0 {
 		// Record exists - find the ID and update it.
 		// This is imprecise without knowing the original content; if a label
 		// has multiple RRs we'll just update the first one.
 		for _, r := range records {
 			if r.Type == rtype {
+				rr := cloudflare.UpdateDNSRecordParams{}
 				rr.ID = r.ID
 				rr.Type = r.Type
 				rr.Content = content
 				rr.TTL = ttl
 				rr.Proxied = &proxy
+				rr.Priority = &priority
 
-				err := api.UpdateDNSRecord(context.Background(), zoneID, r.ID, rr)
+				result, err = api.UpdateDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), rr)
 				if err != nil {
 					fmt.Println("Error updating DNS record:", err)
 					return err
-				}
-				resp = &cloudflare.DNSRecordResponse{
-					Result: rr,
 				}
 			}
 		}
 	} else {
 		// Record doesn't exist - create it
-		rr.Type = rtype
-		rr.Content = content
-		rr.TTL = ttl
-		rr.Proxied = &proxy
+		rr := cloudflare.CreateDNSRecordParams{
+			Name:     name,
+			Type:     rtype,
+			Content:  content,
+			TTL:      ttl,
+			Proxied:  &proxy,
+			Priority: &priority,
+		}
+
 		// TODO: Print the response.
-		resp, err = api.CreateDNSRecord(context.Background(), zoneID, rr)
+		result, err = api.CreateDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), rr)
 		if err != nil {
 			fmt.Println("Error creating DNS record:", err)
 			return err
@@ -129,7 +132,7 @@ func dnsCreateOrUpdate(c *cli.Context) error {
 	}
 
 	output := [][]string{
-		formatDNSRecord(resp.Result),
+		formatDNSRecord(result),
 	}
 
 	writeTable(c, output, "ID", "Name", "Type", "Content", "TTL", "Proxiable", "Proxy", "Locked")
@@ -149,6 +152,7 @@ func dnsUpdate(c *cli.Context) error {
 	content := c.String("content")
 	ttl := c.Int("ttl")
 	proxy := c.Bool("proxy")
+	priority := uint16(c.Uint("priority"))
 
 	zoneID, err := api.ZoneIDByName(zone)
 	if err != nil {
@@ -156,15 +160,16 @@ func dnsUpdate(c *cli.Context) error {
 		return err
 	}
 
-	record := cloudflare.DNSRecord{
-		ID:      recordID,
-		Name:    name,
-		Type:    strings.ToUpper(rtype),
-		Content: content,
-		TTL:     ttl,
-		Proxied: &proxy,
+	record := cloudflare.UpdateDNSRecordParams{
+		ID:       recordID,
+		Name:     name,
+		Type:     strings.ToUpper(rtype),
+		Content:  content,
+		TTL:      ttl,
+		Proxied:  &proxy,
+		Priority: &priority,
 	}
-	err = api.UpdateDNSRecord(context.Background(), zoneID, recordID, record)
+	_, err = api.UpdateDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), record)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error updating DNS record: ", err)
 		return err
@@ -187,7 +192,7 @@ func dnsDelete(c *cli.Context) error {
 		return err
 	}
 
-	err = api.DeleteDNSRecord(context.Background(), zoneID, recordID)
+	err = api.DeleteDNSRecord(context.Background(), cloudflare.ZoneIdentifier(zoneID), recordID)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error deleting DNS record: ", err)
 		return err

@@ -2,12 +2,12 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
 )
 
 // Magic Transit IPsec Tunnel Error messages.
@@ -33,7 +33,7 @@ type MagicTransitIPsecTunnel struct {
 	CreatedOn          *time.Time                          `json:"created_on,omitempty"`
 	ModifiedOn         *time.Time                          `json:"modified_on,omitempty"`
 	Name               string                              `json:"name"`
-	CustomerEndpoint   string                              `json:"customer_endpoint"`
+	CustomerEndpoint   string                              `json:"customer_endpoint,omitempty"`
 	CloudflareEndpoint string                              `json:"cloudflare_endpoint"`
 	InterfaceAddress   string                              `json:"interface_address"`
 	Description        string                              `json:"description,omitempty"`
@@ -41,6 +41,7 @@ type MagicTransitIPsecTunnel struct {
 	Psk                string                              `json:"psk,omitempty"`
 	PskMetadata        *MagicTransitIPsecTunnelPskMetadata `json:"psk_metadata,omitempty"`
 	RemoteIdentities   *RemoteIdentities                   `json:"remote_identities,omitempty"`
+	AllowNullCipher    bool                                `json:"allow_null_cipher"`
 }
 
 // ListMagicTransitIPsecTunnelsResponse contains a response including IPsec tunnels.
@@ -103,7 +104,7 @@ func (api *API) ListMagicTransitIPsecTunnels(ctx context.Context, accountID stri
 
 	result := ListMagicTransitIPsecTunnelsResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return []MagicTransitIPsecTunnel{}, errors.Wrap(err, errUnmarshalError)
+		return []MagicTransitIPsecTunnel{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result.Result.IPsecTunnels, nil
@@ -121,7 +122,7 @@ func (api *API) GetMagicTransitIPsecTunnel(ctx context.Context, accountID string
 
 	result := GetMagicTransitIPsecTunnelResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return MagicTransitIPsecTunnel{}, errors.Wrap(err, errUnmarshalError)
+		return MagicTransitIPsecTunnel{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result.Result.IPsecTunnel, nil
@@ -142,7 +143,7 @@ func (api *API) CreateMagicTransitIPsecTunnels(ctx context.Context, accountID st
 
 	result := ListMagicTransitIPsecTunnelsResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return []MagicTransitIPsecTunnel{}, errors.Wrap(err, errUnmarshalError)
+		return []MagicTransitIPsecTunnel{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result.Result.IPsecTunnels, nil
@@ -161,7 +162,7 @@ func (api *API) UpdateMagicTransitIPsecTunnel(ctx context.Context, accountID str
 
 	result := UpdateMagicTransitIPsecTunnelResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return MagicTransitIPsecTunnel{}, errors.Wrap(err, errUnmarshalError)
+		return MagicTransitIPsecTunnel{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	if !result.Result.Modified {
@@ -184,7 +185,7 @@ func (api *API) DeleteMagicTransitIPsecTunnel(ctx context.Context, accountID str
 
 	result := DeleteMagicTransitIPsecTunnelResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return MagicTransitIPsecTunnel{}, errors.Wrap(err, errUnmarshalError)
+		return MagicTransitIPsecTunnel{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	if !result.Result.Deleted {
@@ -207,7 +208,7 @@ func (api *API) GenerateMagicTransitIPsecTunnelPSK(ctx context.Context, accountI
 
 	result := GenerateMagicTransitIPsecTunnelPSKResponse{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return "", nil, errors.Wrap(err, errUnmarshalError)
+		return "", nil, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result.Result.Psk, result.Result.PskMetadata, nil

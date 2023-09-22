@@ -9,11 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var firewallRulePageOpts = PaginationOptions{
-	PerPage: 25,
-	Page:    1,
-}
-
 func TestFirewallRules(t *testing.T) {
 	setup()
 	defer teardown()
@@ -173,7 +168,7 @@ func TestFirewallRules(t *testing.T) {
 		},
 	}
 
-	actual, err := client.FirewallRules(context.Background(), "d56084adb405e0b7e32c52321bf07be6", firewallRulePageOpts)
+	actual, _, err := client.FirewallRules(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), FirewallRuleListParams{})
 
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -196,7 +191,7 @@ func TestFirewallRule(t *testing.T) {
 				"priority":null,
 				"filter":{
 					"id":"b7ff25282d394be7b945e23c7106ce8a",
-					"expression":"ip.src in {127.0.0.1} ~ \"^.*/login.php$\")",
+					"expression":"ip.src in {198.51.100.1} ~ \"^.*/login.php$\")",
 					"paused":false,
 					"description":"Login from office"
 				}
@@ -217,13 +212,13 @@ func TestFirewallRule(t *testing.T) {
 		Priority:    nil,
 		Filter: Filter{
 			ID:          "b7ff25282d394be7b945e23c7106ce8a",
-			Expression:  "ip.src in {127.0.0.1} ~ \"^.*/login.php$\")",
+			Expression:  "ip.src in {198.51.100.1} ~ \"^.*/login.php$\")",
 			Paused:      false,
 			Description: "Login from office",
 		},
 	}
 
-	actual, err := client.FirewallRule(context.Background(), "d56084adb405e0b7e32c52321bf07be6", "f2d427378e7542acb295380d352e2ebd")
+	actual, err := client.FirewallRule(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), "f2d427378e7542acb295380d352e2ebd")
 
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -247,7 +242,7 @@ func TestCreateSingleFirewallRule(t *testing.T) {
 					"priority":null,
 					"filter":{
 						"id":"b7ff25282d394be7b945e23c7106ce8a",
-						"expression":"ip.src in {127.0.0.0/24}",
+						"expression":"ip.src in {198.51.100.0/24}",
 						"paused":false,
 						"description":"Login from office"
 					}
@@ -261,6 +256,22 @@ func TestCreateSingleFirewallRule(t *testing.T) {
 	}
 
 	mux.HandleFunc("/zones/d56084adb405e0b7e32c52321bf07be6/firewall/rules", handler)
+	params := []FirewallRuleCreateParams{
+		{
+			ID:          "f2d427378e7542acb295380d352e2ebd",
+			Paused:      false,
+			Description: "do not challenge login from office",
+			Action:      "allow",
+			Priority:    nil,
+			Filter: Filter{
+				ID:          "b7ff25282d394be7b945e23c7106ce8a",
+				Expression:  "ip.src in {198.51.100.0/24}",
+				Paused:      false,
+				Description: "Login from office",
+			},
+		},
+	}
+
 	want := []FirewallRule{
 		{
 			ID:          "f2d427378e7542acb295380d352e2ebd",
@@ -270,14 +281,14 @@ func TestCreateSingleFirewallRule(t *testing.T) {
 			Priority:    nil,
 			Filter: Filter{
 				ID:          "b7ff25282d394be7b945e23c7106ce8a",
-				Expression:  "ip.src in {127.0.0.0/24}",
+				Expression:  "ip.src in {198.51.100.0/24}",
 				Paused:      false,
 				Description: "Login from office",
 			},
 		},
 	}
 
-	actual, err := client.CreateFirewallRules(context.Background(), "d56084adb405e0b7e32c52321bf07be6", want)
+	actual, err := client.CreateFirewallRules(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), params)
 
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -301,7 +312,7 @@ func TestCreateMultipleFirewallRules(t *testing.T) {
 					"priority":null,
 					"filter":{
 						"id":"b7ff25282d394be7b945e23c7106ce8a",
-						"expression":"ip.src in {127.0.0.0/24}",
+						"expression":"ip.src in {198.51.100.0/24}",
 						"paused":false,
 						"description":"Login from office"
 					}
@@ -328,7 +339,7 @@ func TestCreateMultipleFirewallRules(t *testing.T) {
 	}
 
 	mux.HandleFunc("/zones/d56084adb405e0b7e32c52321bf07be6/firewall/rules", handler)
-	want := []FirewallRule{
+	params := []FirewallRuleCreateParams{
 		{
 			ID:          "f2d427378e7542acb295380d352e2ebd",
 			Paused:      false,
@@ -337,7 +348,7 @@ func TestCreateMultipleFirewallRules(t *testing.T) {
 			Priority:    nil,
 			Filter: Filter{
 				ID:          "b7ff25282d394be7b945e23c7106ce8a",
-				Expression:  "ip.src in {127.0.0.0/24}",
+				Expression:  "ip.src in {198.51.100.0/24}",
 				Paused:      false,
 				Description: "Login from office",
 			},
@@ -357,7 +368,36 @@ func TestCreateMultipleFirewallRules(t *testing.T) {
 		},
 	}
 
-	actual, err := client.CreateFirewallRules(context.Background(), "d56084adb405e0b7e32c52321bf07be6", want)
+	want := []FirewallRule{
+		{
+			ID:          "f2d427378e7542acb295380d352e2ebd",
+			Paused:      false,
+			Description: "do not challenge login from office",
+			Action:      "allow",
+			Priority:    nil,
+			Filter: Filter{
+				ID:          "b7ff25282d394be7b945e23c7106ce8a",
+				Expression:  "ip.src in {198.51.100.0/24}",
+				Paused:      false,
+				Description: "Login from office",
+			},
+		},
+		{
+			ID:          "cbf4b7a5a2a24e59a03044d6d44ceb09",
+			Paused:      false,
+			Description: "challenge login",
+			Action:      "challenge",
+			Priority:    nil,
+			Filter: Filter{
+				ID:          "c218c536b2bd406f958f278cf0fa8c0f",
+				Expression:  "(http.request.uri.path ~ \"^.*/wp-login.php$\")",
+				Paused:      false,
+				Description: "Login",
+			},
+		},
+	}
+
+	actual, err := client.CreateFirewallRules(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), params)
 
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -368,7 +408,7 @@ func TestUpdateFirewallRuleWithMissingID(t *testing.T) {
 	setup()
 	defer teardown()
 
-	want := FirewallRule{
+	want := FirewallRuleUpdateParams{
 		ID:          "",
 		Paused:      false,
 		Description: "challenge site",
@@ -382,7 +422,7 @@ func TestUpdateFirewallRuleWithMissingID(t *testing.T) {
 		},
 	}
 
-	_, err := client.UpdateFirewallRule(context.Background(), "d56084adb405e0b7e32c52321bf07be6", want)
+	_, err := client.UpdateFirewallRule(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), want)
 	assert.EqualError(t, err, "firewall rule ID cannot be empty")
 }
 
@@ -415,6 +455,20 @@ func TestUpdateSingleFirewallRule(t *testing.T) {
 	}
 
 	mux.HandleFunc("/zones/d56084adb405e0b7e32c52321bf07be6/firewall/rules/52161eb6af4241bb9d4b32394be72fdf", handler)
+	params := FirewallRuleUpdateParams{
+		ID:          "52161eb6af4241bb9d4b32394be72fdf",
+		Paused:      false,
+		Description: "challenge site",
+		Action:      "challenge",
+		Priority:    nil,
+		Filter: Filter{
+			ID:          "f2a64520581a4209aab12187a0081364",
+			Expression:  "not http.request.uri.path matches \"^/api/.*$\"",
+			Paused:      false,
+			Description: "not /api",
+		},
+	}
+
 	want := FirewallRule{
 		ID:          "52161eb6af4241bb9d4b32394be72fdf",
 		Paused:      false,
@@ -429,7 +483,7 @@ func TestUpdateSingleFirewallRule(t *testing.T) {
 		},
 	}
 
-	actual, err := client.UpdateFirewallRule(context.Background(), "d56084adb405e0b7e32c52321bf07be6", want)
+	actual, err := client.UpdateFirewallRule(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), params)
 
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -453,7 +507,7 @@ func TestUpdateMultipleFirewallRules(t *testing.T) {
 					"priority":null,
 					"filter":{
 						"id":"b7ff25282d394be7b945e23c7106ce8a",
-						"expression":"ip.src in {127.0.0.0/24}",
+						"expression":"ip.src in {198.51.100.0/24}",
 						"paused":false,
 						"description":"Login from office"
 					}
@@ -480,7 +534,7 @@ func TestUpdateMultipleFirewallRules(t *testing.T) {
 	}
 
 	mux.HandleFunc("/zones/d56084adb405e0b7e32c52321bf07be6/firewall/rules", handler)
-	want := []FirewallRule{
+	params := []FirewallRuleUpdateParams{
 		{
 			ID:          "f2d427378e7542acb295380d352e2ebd",
 			Paused:      false,
@@ -489,7 +543,7 @@ func TestUpdateMultipleFirewallRules(t *testing.T) {
 			Priority:    nil,
 			Filter: Filter{
 				ID:          "b7ff25282d394be7b945e23c7106ce8a",
-				Expression:  "ip.src in {127.0.0.0/24}",
+				Expression:  "ip.src in {198.51.100.0/24}",
 				Paused:      false,
 				Description: "Login from office",
 			},
@@ -509,7 +563,36 @@ func TestUpdateMultipleFirewallRules(t *testing.T) {
 		},
 	}
 
-	actual, err := client.UpdateFirewallRules(context.Background(), "d56084adb405e0b7e32c52321bf07be6", want)
+	want := []FirewallRule{
+		{
+			ID:          "f2d427378e7542acb295380d352e2ebd",
+			Paused:      false,
+			Description: "do not challenge login from office",
+			Action:      "allow",
+			Priority:    nil,
+			Filter: Filter{
+				ID:          "b7ff25282d394be7b945e23c7106ce8a",
+				Expression:  "ip.src in {198.51.100.0/24}",
+				Paused:      false,
+				Description: "Login from office",
+			},
+		},
+		{
+			ID:          "cbf4b7a5a2a24e59a03044d6d44ceb09",
+			Paused:      false,
+			Description: "challenge login",
+			Action:      "challenge",
+			Priority:    nil,
+			Filter: Filter{
+				ID:          "c218c536b2bd406f958f278cf0fa8c0f",
+				Expression:  "(http.request.uri.path ~ \"^.*/wp-login.php$\")",
+				Paused:      false,
+				Description: "Login",
+			},
+		},
+	}
+
+	actual, err := client.UpdateFirewallRules(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), params)
 
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -534,7 +617,7 @@ func TestDeleteSingleFirewallRule(t *testing.T) {
 
 	mux.HandleFunc("/zones/d56084adb405e0b7e32c52321bf07be6/firewall/rules/f2d427378e7542acb295380d352e2ebd", handler)
 
-	err := client.DeleteFirewallRule(context.Background(), "d56084adb405e0b7e32c52321bf07be6", "f2d427378e7542acb295380d352e2ebd")
+	err := client.DeleteFirewallRule(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), "f2d427378e7542acb295380d352e2ebd")
 	assert.NoError(t, err)
 }
 
@@ -542,6 +625,6 @@ func TestDeleteFirewallRuleWithMissingID(t *testing.T) {
 	setup()
 	defer teardown()
 
-	err := client.DeleteFirewallRule(context.Background(), "d56084adb405e0b7e32c52321bf07be6", "")
+	err := client.DeleteFirewallRule(context.Background(), ZoneIdentifier("d56084adb405e0b7e32c52321bf07be6"), "")
 	assert.EqualError(t, err, "firewall rule ID cannot be empty")
 }

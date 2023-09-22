@@ -2,13 +2,13 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,6 +21,12 @@ var (
 
 	// server is a test HTTP server used to provide mock API responses.
 	server *httptest.Server
+
+	// testAccountRC is a test account resource container.
+	testAccountRC = AccountIdentifier(testAccountID)
+
+	// testZoneRC is a test zone resource container.
+	testZoneRC = ZoneIdentifier(testZoneID)
 )
 
 func setup(opts ...Option) {
@@ -153,7 +159,7 @@ func TestClient_RetryCanSucceedAfterErrors(t *testing.T) {
             "success": true,
             "errors": [],
             "messages": [],
-            "result": 
+            "result":
                 {
                     "id": "17b5962d775c646f3f9725cbc7a53df4",
                     "created_on": "2014-01-01T05:20:00.12345Z",
@@ -165,7 +171,7 @@ func TestClient_RetryCanSucceedAfterErrors(t *testing.T) {
                     "origins": [
                       {
                         "name": "app-server-1",
-                        "address": "0.0.0.0",
+                        "address": "198.51.100.1",
                         "enabled": true
                       }
                     ],
@@ -175,7 +181,7 @@ func TestClient_RetryCanSucceedAfterErrors(t *testing.T) {
                 "page": 1,
                 "per_page": 20,
                 "count": 1,
-                "total_count": 2000
+                "total_count": 1
             }
         }`)
 		}
@@ -184,7 +190,7 @@ func TestClient_RetryCanSucceedAfterErrors(t *testing.T) {
 
 	mux.HandleFunc("/user/load_balancers/pools", handler)
 
-	_, err := client.CreateLoadBalancerPool(context.Background(), LoadBalancerPool{ID: "123"})
+	_, err := client.CreateLoadBalancerPool(context.Background(), UserIdentifier(testUserID), CreateLoadBalancerPoolParams{LoadBalancerPool: LoadBalancerPool{ID: "123"}})
 	assert.NoError(t, err)
 }
 
@@ -209,7 +215,7 @@ func TestClient_RetryReturnsPersistentErrorResponse(t *testing.T) {
 
 	mux.HandleFunc("/user/load_balancers/pools", handler)
 
-	_, err := client.ListLoadBalancerPools(context.Background())
+	_, err := client.ListLoadBalancerPools(context.Background(), UserIdentifier(testUserID), ListLoadBalancerPoolParams{})
 	assert.Error(t, err)
 }
 
@@ -352,7 +358,7 @@ func TestZoneIDByNameWithNonUniqueZonesWithoutOrgID(t *testing.T) {
 }
 
 func TestZoneIDByNameWithIDN(t *testing.T) {
-	setup(UsingAccount("01a7362d577a6c3019a474fd6f485823"))
+	setup()
 	defer teardown()
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -475,7 +481,7 @@ func TestErrorFromResponseWithUnmarshalingError(t *testing.T) {
 
 	mux.HandleFunc("/accounts/01a7362d577a6c3019a474fd6f485823/access/apps", handler)
 
-	_, err := client.CreateAccessApplication(context.Background(), "01a7362d577a6c3019a474fd6f485823", AccessApplication{
+	_, err := client.CreateAccessApplication(context.Background(), AccountIdentifier("01a7362d577a6c3019a474fd6f485823"), CreateAccessApplicationParams{
 		Name:            "Admin Site",
 		Domain:          "test.example.com/admin",
 		SessionDuration: "24h",
@@ -491,15 +497,22 @@ func (t RoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, erro
 }
 
 func TestContextTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+	}
+
+	mux.HandleFunc("/timeout", handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	cfClient, _ := New("deadbeef", "cloudflare@example.org")
-
 	start := time.Now()
-	_, err := cfClient.makeRequestContext(ctx, http.MethodHead, server.URL, nil)
+	_, err := client.makeRequestContext(ctx, http.MethodHead, "/timeout", nil)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.WithinDuration(t, start, time.Now(), time.Second*2,
+	assert.WithinDuration(t, start, time.Now(), 2*time.Second,
 		"makeRequestContext took too much time with an expiring context")
 }
 

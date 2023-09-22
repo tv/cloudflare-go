@@ -1,34 +1,50 @@
 package cloudflare
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
-// Error messages.
 const (
-	errEmptyCredentials          = "invalid credentials: key & email must not be empty" //nolint:gosec,unused
-	errEmptyAPIToken             = "invalid credentials: API Token must not be empty"   //nolint:gosec,unused
-	errInternalServiceError      = "internal service error"
-	errMakeRequestError          = "error from makeRequest"
-	errUnmarshalError            = "error unmarshalling the JSON response"
-	errUnmarshalErrorBody        = "error unmarshalling the JSON response error body"
-	errRequestNotSuccessful      = "error reported by API"
-	errMissingAccountID          = "account ID is empty and must be provided"
-	errOperationStillRunning     = "bulk operation did not finish before timeout"
-	errOperationUnexpectedStatus = "bulk operation returned an unexpected status"
-	errResultInfo                = "incorrect pagination info (result_info) in responses"
-	errManualPagination          = "unexpected pagination options passed to functions that handle pagination automatically"
-	errInvalidZoneIdentifer      = "invalid zone identifier: %s"
+	errEmptyCredentials                       = "invalid credentials: key & email must not be empty" //nolint:gosec,unused
+	errEmptyAPIToken                          = "invalid credentials: API Token must not be empty"   //nolint:gosec,unused
+	errInternalServiceError                   = "internal service error"
+	errMakeRequestError                       = "error from makeRequest"
+	errUnmarshalError                         = "error unmarshalling the JSON response"
+	errUnmarshalErrorBody                     = "error unmarshalling the JSON response error body"
+	errRequestNotSuccessful                   = "error reported by API"
+	errMissingAccountID                       = "required missing account ID"
+	errMissingZoneID                          = "required missing zone ID"
+	errMissingAccountOrZoneID                 = "either account ID or zone ID must be provided"
+	errAccountIDAndZoneIDAreMutuallyExclusive = "account ID and zone ID are mutually exclusive"
+	errMissingResourceIdentifier              = "required missing resource identifier"
+	errOperationStillRunning                  = "bulk operation did not finish before timeout"
+	errOperationUnexpectedStatus              = "bulk operation returned an unexpected status"
+	errResultInfo                             = "incorrect pagination info (result_info) in responses"
+	errManualPagination                       = "unexpected pagination options passed to functions that handle pagination automatically"
+	errInvalidResourceIdentifer               = "invalid resource identifier: %s"
+	errInvalidZoneIdentifer                   = "invalid zone identifier: %s"
+	errAPIKeysAndTokensAreMutuallyExclusive   = "API keys and tokens are mutually exclusive" //nolint:gosec
+	errMissingCredentials                     = "no credentials provided"
+
+	errInvalidResourceContainerAccess        = "requested resource container (%q) is not supported for this endpoint"
+	errRequiredAccountLevelResourceContainer = "this endpoint requires using an account level resource container and identifiers"
+	errRequiredZoneLevelResourceContainer    = "this endpoint requires using a zone level resource container and identifiers"
 )
 
 var (
-	ErrMissingAccountID          = errors.New("required missing account ID")
-	ErrMissingZoneID             = errors.New("required missing zone ID")
-	ErrMissingResourceIdentifier = errors.New("required missing resource identifier")
+	ErrAPIKeysAndTokensAreMutuallyExclusive   = errors.New(errAPIKeysAndTokensAreMutuallyExclusive)
+	ErrMissingCredentials                     = errors.New(errMissingCredentials)
+	ErrMissingAccountID                       = errors.New(errMissingAccountID)
+	ErrMissingZoneID                          = errors.New(errMissingZoneID)
+	ErrAccountIDOrZoneIDAreRequired           = errors.New(errMissingAccountOrZoneID)
+	ErrAccountIDAndZoneIDAreMutuallyExclusive = errors.New(errAccountIDAndZoneIDAreMutuallyExclusive)
+	ErrMissingResourceIdentifier              = errors.New(errMissingResourceIdentifier)
+
+	ErrRequiredAccountLevelResourceContainer = errors.New(errRequiredAccountLevelResourceContainer)
+	ErrRequiredZoneLevelResourceContainer    = errors.New(errRequiredZoneLevelResourceContainer)
 )
 
 type ErrorType string
@@ -58,6 +74,9 @@ type Error struct {
 	// ErrorMessages is a list of all the error codes.
 	ErrorMessages []string
 
+	// Messages is a list of informational messages provided by the endpoint.
+	Messages []ResponseInfo
+
 	// RayID is the internal identifier for the request that was made.
 	RayID string
 }
@@ -78,7 +97,21 @@ func (e Error) Error() string {
 		errMessages = append(errMessages, m)
 	}
 
-	return errString + strings.Join(errMessages, ", ")
+	msgs := []string{}
+	for _, m := range e.Messages {
+		msgs = append(msgs, m.Message)
+	}
+
+	errString += strings.Join(errMessages, ", ")
+
+	// `Messages` is primarily used for additional validation failure notes in
+	// page rules. This shouldn't be used going forward but instead, use the
+	// error fields appropriately.
+	if len(msgs) > 0 {
+		errString += "\n" + strings.Join(msgs, "  \n")
+	}
+
+	return errString
 }
 
 // RequestError is for 4xx errors that we encounter not covered elsewhere
@@ -103,12 +136,26 @@ func (e RequestError) ErrorMessages() []string {
 	return e.cloudflareError.ErrorMessages
 }
 
+func (e RequestError) InternalErrorCodeIs(code int) bool {
+	return e.cloudflareError.InternalErrorCodeIs(code)
+}
+
+func (e RequestError) Messages() []ResponseInfo {
+	return e.cloudflareError.Messages
+}
+
 func (e RequestError) RayID() string {
 	return e.cloudflareError.RayID
 }
 
 func (e RequestError) Type() ErrorType {
 	return e.cloudflareError.Type
+}
+
+func NewRequestError(e *Error) RequestError {
+	return RequestError{
+		cloudflareError: e,
+	}
 }
 
 // RatelimitError is for HTTP 429s where the service is telling the client to
@@ -133,12 +180,22 @@ func (e RatelimitError) ErrorMessages() []string {
 	return e.cloudflareError.ErrorMessages
 }
 
+func (e RatelimitError) InternalErrorCodeIs(code int) bool {
+	return e.cloudflareError.InternalErrorCodeIs(code)
+}
+
 func (e RatelimitError) RayID() string {
 	return e.cloudflareError.RayID
 }
 
 func (e RatelimitError) Type() ErrorType {
 	return e.cloudflareError.Type
+}
+
+func NewRatelimitError(e *Error) RatelimitError {
+	return RatelimitError{
+		cloudflareError: e,
+	}
 }
 
 // ServiceError is a handler for 5xx errors returned to the client.
@@ -162,12 +219,22 @@ func (e ServiceError) ErrorMessages() []string {
 	return e.cloudflareError.ErrorMessages
 }
 
+func (e ServiceError) InternalErrorCodeIs(code int) bool {
+	return e.cloudflareError.InternalErrorCodeIs(code)
+}
+
 func (e ServiceError) RayID() string {
 	return e.cloudflareError.RayID
 }
 
 func (e ServiceError) Type() ErrorType {
 	return e.cloudflareError.Type
+}
+
+func NewServiceError(e *Error) ServiceError {
+	return ServiceError{
+		cloudflareError: e,
+	}
 }
 
 // AuthenticationError is for HTTP 401 responses.
@@ -191,12 +258,22 @@ func (e AuthenticationError) ErrorMessages() []string {
 	return e.cloudflareError.ErrorMessages
 }
 
+func (e AuthenticationError) InternalErrorCodeIs(code int) bool {
+	return e.cloudflareError.InternalErrorCodeIs(code)
+}
+
 func (e AuthenticationError) RayID() string {
 	return e.cloudflareError.RayID
 }
 
 func (e AuthenticationError) Type() ErrorType {
 	return e.cloudflareError.Type
+}
+
+func NewAuthenticationError(e *Error) AuthenticationError {
+	return AuthenticationError{
+		cloudflareError: e,
+	}
 }
 
 // AuthorizationError is for HTTP 403 responses.
@@ -220,12 +297,22 @@ func (e AuthorizationError) ErrorMessages() []string {
 	return e.cloudflareError.ErrorMessages
 }
 
+func (e AuthorizationError) InternalErrorCodeIs(code int) bool {
+	return e.cloudflareError.InternalErrorCodeIs(code)
+}
+
 func (e AuthorizationError) RayID() string {
 	return e.cloudflareError.RayID
 }
 
 func (e AuthorizationError) Type() ErrorType {
 	return e.cloudflareError.Type
+}
+
+func NewAuthorizationError(e *Error) AuthorizationError {
+	return AuthorizationError{
+		cloudflareError: e,
+	}
 }
 
 // NotFoundError is for HTTP 404 responses.
@@ -249,12 +336,22 @@ func (e NotFoundError) ErrorMessages() []string {
 	return e.cloudflareError.ErrorMessages
 }
 
+func (e NotFoundError) InternalErrorCodeIs(code int) bool {
+	return e.cloudflareError.InternalErrorCodeIs(code)
+}
+
 func (e NotFoundError) RayID() string {
 	return e.cloudflareError.RayID
 }
 
 func (e NotFoundError) Type() ErrorType {
 	return e.cloudflareError.Type
+}
+
+func NewNotFoundError(e *Error) NotFoundError {
+	return NotFoundError{
+		cloudflareError: e,
+	}
 }
 
 // ClientError returns a boolean whether or not the raised error was caused by

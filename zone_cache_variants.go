@@ -2,12 +2,11 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
 )
 
 type ZoneCacheVariantsValues struct {
@@ -50,7 +49,7 @@ func (api *API) ZoneCacheVariants(ctx context.Context, zoneID string) (ZoneCache
 	var r zoneCacheVariantsSingleResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return ZoneCacheVariants{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneCacheVariants{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -70,7 +69,7 @@ func (api *API) UpdateZoneCacheVariants(ctx context.Context, zoneID string, vari
 	response := &zoneCacheVariantsSingleResponse{}
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return ZoneCacheVariants{}, errors.Wrap(err, errUnmarshalError)
+		return ZoneCacheVariants{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response.Result, nil

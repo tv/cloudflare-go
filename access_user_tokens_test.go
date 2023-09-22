@@ -3,9 +3,10 @@ package cloudflare
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRevokeAccessUserTokens(t *testing.T) {
@@ -24,9 +25,7 @@ func TestRevokeAccessUserTokens(t *testing.T) {
 
 	mux.HandleFunc("/accounts/"+testAccountID+"/access/organizations/revoke_user", handler)
 
-	AccessUserEmail := AccessUserEmail{Email: "test@example.com"}
-
-	err := client.RevokeAccessUserTokens(context.Background(), testAccountID, AccessUserEmail)
+	err := client.RevokeAccessUserTokens(context.Background(), testAccountRC, RevokeAccessUserTokensParams{Email: "test@example.com"})
 
 	assert.NoError(t, err)
 }
@@ -47,9 +46,7 @@ func TestRevokeZoneLevelAccessUserTokens(t *testing.T) {
 
 	mux.HandleFunc("/zones/"+testZoneID+"/access/organizations/revoke_user", handler)
 
-	AccessUserEmail := AccessUserEmail{Email: "test@example.com"}
-
-	err := client.RevokeZoneLevelAccessUserTokens(context.Background(), testZoneID, AccessUserEmail)
+	err := client.RevokeAccessUserTokens(context.Background(), testZoneRC, RevokeAccessUserTokensParams{Email: "test@example.com"})
 
 	assert.NoError(t, err)
 }

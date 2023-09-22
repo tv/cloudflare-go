@@ -2,11 +2,10 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
 )
 
 type TeamsDevicesList struct {
@@ -20,23 +19,26 @@ type TeamsDeviceDetail struct {
 }
 
 type TeamsDeviceListItem struct {
-	User         UserItem `json:"user,omitempty"`
-	ID           string   `json:"id,omitempty"`
-	Key          string   `json:"key,omitempty"`
-	DeviceType   string   `json:"device_type,omitempty"`
-	Name         string   `json:"name,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Manufacturer string   `json:"manufacturer,omitempty"`
-	Deleted      bool     `json:"deleted,omitempty"`
-	Version      string   `json:"version,omitempty"`
-	SerialNumber string   `json:"serial_number,omitempty"`
-	OSVersion    string   `json:"os_version,omitempty"`
-	MacAddress   string   `json:"mac_address,omitempty"`
-	IP           string   `json:"ip,omitempty"`
-	Created      string   `json:"created,omitempty"`
-	Updated      string   `json:"updated,omitempty"`
-	LastSeen     string   `json:"last_seen,omitempty"`
-	RevokedAt    string   `json:"revoked_at,omitempty"`
+	User             UserItem `json:"user,omitempty"`
+	ID               string   `json:"id,omitempty"`
+	Key              string   `json:"key,omitempty"`
+	DeviceType       string   `json:"device_type,omitempty"`
+	Name             string   `json:"name,omitempty"`
+	Model            string   `json:"model,omitempty"`
+	Manufacturer     string   `json:"manufacturer,omitempty"`
+	Deleted          bool     `json:"deleted,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	SerialNumber     string   `json:"serial_number,omitempty"`
+	OSVersion        string   `json:"os_version,omitempty"`
+	OSDistroName     string   `json:"os_distro_name,omitempty"`
+	OsDistroRevision string   `json:"os_distro_revision,omitempty"`
+	OSVersionExtra   string   `json:"os_version_extra,omitempty"`
+	MacAddress       string   `json:"mac_address,omitempty"`
+	IP               string   `json:"ip,omitempty"`
+	Created          string   `json:"created,omitempty"`
+	Updated          string   `json:"updated,omitempty"`
+	LastSeen         string   `json:"last_seen,omitempty"`
+	RevokedAt        string   `json:"revoked_at,omitempty"`
 }
 
 type UserItem struct {
@@ -59,7 +61,7 @@ func (api *API) ListTeamsDevices(ctx context.Context, accountID string) ([]Teams
 	var response TeamsDevicesList
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return []TeamsDeviceListItem{}, errors.Wrap(err, errUnmarshalError)
+		return []TeamsDeviceListItem{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response.Result, nil
@@ -78,7 +80,7 @@ func (api *API) RevokeTeamsDevices(ctx context.Context, accountID string, device
 
 	result := Response{}
 	if err := json.Unmarshal(res, &result); err != nil {
-		return result, errors.Wrap(err, errUnmarshalError)
+		return result, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return result, err
@@ -98,7 +100,7 @@ func (api *API) GetTeamsDeviceDetails(ctx context.Context, accountID string, dev
 	var response TeamsDeviceDetail
 	err = json.Unmarshal(res, &response)
 	if err != nil {
-		return TeamsDeviceListItem{}, errors.Wrap(err, errUnmarshalError)
+		return TeamsDeviceListItem{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 
 	return response.Result, nil

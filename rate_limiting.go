@@ -2,11 +2,10 @@ package cloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
-	"github.com/pkg/errors"
+	"github.com/goccy/go-json"
 )
 
 // RateLimit is a policy than can be applied to limit traffic within a customer domain.
@@ -96,7 +95,7 @@ func (api *API) CreateRateLimit(ctx context.Context, zoneID string, limit RateLi
 	}
 	var r rateLimitResponse
 	if err := json.Unmarshal(res, &r); err != nil {
-		return RateLimit{}, errors.Wrap(err, errUnmarshalError)
+		return RateLimit{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -115,7 +114,7 @@ func (api *API) ListRateLimits(ctx context.Context, zoneID string, pageOpts Pagi
 	var r rateLimitListResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return []RateLimit{}, ResultInfo{}, errors.Wrap(err, errUnmarshalError)
+		return []RateLimit{}, ResultInfo{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, r.ResultInfo, nil
 }
@@ -161,7 +160,7 @@ func (api *API) RateLimit(ctx context.Context, zoneID, limitID string) (RateLimi
 	var r rateLimitResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return RateLimit{}, errors.Wrap(err, errUnmarshalError)
+		return RateLimit{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -177,7 +176,7 @@ func (api *API) UpdateRateLimit(ctx context.Context, zoneID, limitID string, lim
 	}
 	var r rateLimitResponse
 	if err := json.Unmarshal(res, &r); err != nil {
-		return RateLimit{}, errors.Wrap(err, errUnmarshalError)
+		return RateLimit{}, fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return r.Result, nil
 }
@@ -194,7 +193,7 @@ func (api *API) DeleteRateLimit(ctx context.Context, zoneID, limitID string) err
 	var r rateLimitResponse
 	err = json.Unmarshal(res, &r)
 	if err != nil {
-		return errors.Wrap(err, errUnmarshalError)
+		return fmt.Errorf("%s: %w", errUnmarshalError, err)
 	}
 	return nil
 }

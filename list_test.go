@@ -54,9 +54,7 @@ func TestListLists(t *testing.T) {
 		},
 	}
 
-	actual, err := client.ListLists(context.Background(), ListListsParams{
-		AccountID: testAccountID,
-	})
+	actual, err := client.ListLists(context.Background(), AccountIdentifier(testAccountID), ListListsParams{})
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
 	}
@@ -102,8 +100,8 @@ func TestCreateList(t *testing.T) {
 		ModifiedOn:            &modifiedOn,
 	}
 
-	actual, err := client.CreateList(context.Background(), ListCreateParams{
-		AccountID: testAccountID, Name: "list1", Description: "This is a note.", Kind: "ip",
+	actual, err := client.CreateList(context.Background(), AccountIdentifier(testAccountID), ListCreateParams{
+		Name: "list1", Description: "This is a note.", Kind: "ip",
 	})
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -150,9 +148,7 @@ func TestGetList(t *testing.T) {
 		ModifiedOn:            &modifiedOn,
 	}
 
-	actual, err := client.GetList(context.Background(), ListGetParams{
-		AccountID: testAccountID, ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
-	})
+	actual, err := client.GetList(context.Background(), AccountIdentifier(testAccountID), "2c0fc9fa937b11eaa1b71c4d701ab86e")
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
 	}
@@ -198,9 +194,9 @@ func TestUpdateList(t *testing.T) {
 		ModifiedOn:            &modifiedOn,
 	}
 
-	actual, err := client.UpdateList(context.Background(),
+	actual, err := client.UpdateList(context.Background(), AccountIdentifier(testAccountID),
 		ListUpdateParams{
-			AccountID: testAccountID, ID: "2c0fc9fa937b11eaa1b71c4d701ab86e", Description: "This note was updated.",
+			ID: "2c0fc9fa937b11eaa1b71c4d701ab86e", Description: "This note was updated.",
 		},
 	)
 	if assert.NoError(t, err) {
@@ -233,9 +229,7 @@ func TestDeleteList(t *testing.T) {
 	want.Messages = []ResponseInfo{}
 	want.Result.ID = "34b12448945f11eaa1b71c4d701ab86e"
 
-	actual, err := client.DeleteList(context.Background(), ListDeleteParams{
-		AccountID: testAccountID, ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
-	})
+	actual, err := client.DeleteList(context.Background(), AccountIdentifier(testAccountID), "2c0fc9fa937b11eaa1b71c4d701ab86e")
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
 	}
@@ -315,8 +309,8 @@ func TestListsItemsIP(t *testing.T) {
 		},
 	}
 
-	actual, err := client.ListListItems(context.Background(), ListListItemsParams{
-		AccountID: testAccountID, ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
+	actual, err := client.ListListItems(context.Background(), AccountIdentifier(testAccountID), ListListItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
 	})
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -421,7 +415,119 @@ func TestListsItemsRedirect(t *testing.T) {
 
 	actual, err := client.ListListItems(
 		context.Background(),
-		ListListItemsParams{AccountID: testAccountID, ID: "0c0fc9fa937b11eaa1b71c4d701ab86e"},
+		AccountIdentifier(testAccountID),
+		ListListItemsParams{ID: "0c0fc9fa937b11eaa1b71c4d701ab86e"},
+	)
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestListsItemsHostname(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": [
+				{
+      				"id": "0c0fc9fa937b11eaa1b71c4d701ab86e",
+      				"hostname": {
+						"url_hostname": "cloudflare.com"
+					},
+      				"comment": "CF hostname",
+      				"created_on": "2023-01-01T08:00:00Z",
+      				"modified_on": "2023-01-10T14:00:00Z"
+    			}
+  			],
+  			"result_info": {
+    			"cursors": {
+					"before": "xxx"
+				}
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/0c0fc9fa937b11eaa1b71c4d701ab86e/items", handler)
+
+	createdOn, _ := time.Parse(time.RFC3339, "2023-01-01T08:00:00Z")
+	modifiedOn, _ := time.Parse(time.RFC3339, "2023-01-10T14:00:00Z")
+
+	want := []ListItem{
+		{
+			ID: "0c0fc9fa937b11eaa1b71c4d701ab86e",
+			Hostname: &Hostname{
+				UrlHostname: "cloudflare.com",
+			},
+			Comment:    "CF hostname",
+			CreatedOn:  &createdOn,
+			ModifiedOn: &modifiedOn,
+		},
+	}
+
+	actual, err := client.ListListItems(
+		context.Background(),
+		AccountIdentifier(testAccountID),
+		ListListItemsParams{ID: "0c0fc9fa937b11eaa1b71c4d701ab86e"},
+	)
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestListsItemsASN(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+
+		fmt.Fprint(w, `{
+			"result": [
+				{
+      				"id": "0c0fc9fa937b11eaa1b71c4d701ab86e",
+      				"asn": 3456,
+      				"comment": "ASN",
+      				"created_on": "2023-01-01T08:00:00Z",
+      				"modified_on": "2023-01-10T14:00:00Z"
+    			}
+  			],
+  			"result_info": {
+    			"cursors": {
+					"before": "xxx"
+				}
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/0c0fc9fa937b11eaa1b71c4d701ab86e/items", handler)
+
+	createdOn, _ := time.Parse(time.RFC3339, "2023-01-01T08:00:00Z")
+	modifiedOn, _ := time.Parse(time.RFC3339, "2023-01-10T14:00:00Z")
+
+	want := []ListItem{
+		{
+			ID:         "0c0fc9fa937b11eaa1b71c4d701ab86e",
+			ASN:        Uint32Ptr(3456),
+			Comment:    "ASN",
+			CreatedOn:  &createdOn,
+			ModifiedOn: &modifiedOn,
+		},
+	}
+
+	actual, err := client.ListListItems(
+		context.Background(),
+		AccountIdentifier(testAccountID),
+		ListListItemsParams{ID: "0c0fc9fa937b11eaa1b71c4d701ab86e"},
 	)
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -453,9 +559,8 @@ func TestCreateListItemsIP(t *testing.T) {
 	want.Messages = []ResponseInfo{}
 	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
 
-	actual, err := client.CreateListItemsAsync(context.Background(), ListCreateItemsParams{
-		AccountID: testAccountID,
-		ID:        "2c0fc9fa937b11eaa1b71c4d701ab86e",
+	actual, err := client.CreateListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListCreateItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
 		Items: []ListItemCreateRequest{{
 			IP:      StringPtr("192.0.2.1"),
 			Comment: "Private IP",
@@ -493,9 +598,8 @@ func TestCreateListItemsRedirect(t *testing.T) {
 	want.Messages = []ResponseInfo{}
 	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
 
-	actual, err := client.CreateListItemsAsync(context.Background(), ListCreateItemsParams{
-		AccountID: testAccountID,
-		ID:        "0c0fc9fa937b11eaa1b71c4d701ab86e",
+	actual, err := client.CreateListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListCreateItemsParams{
+		ID: "0c0fc9fa937b11eaa1b71c4d701ab86e",
 		Items: []ListItemCreateRequest{{
 			Redirect: &Redirect{
 				SourceUrl: "www.3fonteinen.be",
@@ -508,6 +612,93 @@ func TestCreateListItemsRedirect(t *testing.T) {
 				TargetUrl: "https://cloudflare.com",
 			},
 			Comment: "Redirect cf",
+		}}})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestCreateListItemsHostname(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": {
+				"operation_id": "4da8780eeb215e6cb7f48dd981c4ea02"
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/0c0fc9fa937b11eaa1b71c4d701ab86e/items", handler)
+
+	want := ListItemCreateResponse{}
+	want.Success = true
+	want.Errors = []ResponseInfo{}
+	want.Messages = []ResponseInfo{}
+	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
+
+	actual, err := client.CreateListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListCreateItemsParams{
+		ID: "0c0fc9fa937b11eaa1b71c4d701ab86e",
+		Items: []ListItemCreateRequest{{
+			Hostname: &Hostname{
+				UrlHostname: "3fonteinen.be", // ie. only match 3fonteinen.be
+			},
+			Comment: "hostname 3F",
+		}, {
+			Hostname: &Hostname{
+				UrlHostname: "*.cf.com", // ie. match all subdomains of cf.com but not cf.com
+			},
+			Comment: "Hostname cf",
+		}, {
+			Hostname: &Hostname{
+				UrlHostname: "*.abc.com", // ie. equivalent to match all subdomains of abc.com excluding abc.com
+			},
+			Comment: "Hostname abc",
+		}}})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestCreateListItemsASN(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method, "Expected method 'POST', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": {
+				"operation_id": "4da8780eeb215e6cb7f48dd981c4ea02"
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/0c0fc9fa937b11eaa1b71c4d701ab86e/items", handler)
+
+	want := ListItemCreateResponse{}
+	want.Success = true
+	want.Errors = []ResponseInfo{}
+	want.Messages = []ResponseInfo{}
+	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
+
+	actual, err := client.CreateListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListCreateItemsParams{
+		ID: "0c0fc9fa937b11eaa1b71c4d701ab86e",
+		Items: []ListItemCreateRequest{{
+			ASN:     Uint32Ptr(458),
+			Comment: "ASN 458",
+		}, {
+			ASN:     Uint32Ptr(789),
+			Comment: "ASN 789",
 		}}})
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -539,9 +730,8 @@ func TestReplaceListItemsIP(t *testing.T) {
 	want.Messages = []ResponseInfo{}
 	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
 
-	actual, err := client.ReplaceListItemsAsync(context.Background(), ListReplaceItemsParams{
-		AccountID: testAccountID,
-		ID:        "2c0fc9fa937b11eaa1b71c4d701ab86e",
+	actual, err := client.ReplaceListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListReplaceItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
 		Items: []ListItemCreateRequest{{
 			IP:      StringPtr("192.0.2.1"),
 			Comment: "Private IP",
@@ -579,9 +769,8 @@ func TestReplaceListItemsRedirect(t *testing.T) {
 	want.Messages = []ResponseInfo{}
 	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
 
-	actual, err := client.ReplaceListItemsAsync(context.Background(), ListReplaceItemsParams{
-		AccountID: testAccountID,
-		ID:        "2c0fc9fa937b11eaa1b71c4d701ab86e",
+	actual, err := client.ReplaceListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListReplaceItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
 		Items: []ListItemCreateRequest{{
 			Redirect: &Redirect{
 				SourceUrl: "www.3fonteinen.be",
@@ -594,6 +783,88 @@ func TestReplaceListItemsRedirect(t *testing.T) {
 				TargetUrl: "https://cloudflare.com",
 			},
 			Comment: "Redirect cf",
+		}}})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestReplaceListItemsHostname(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": {
+				"operation_id": "4da8780eeb215e6cb7f48dd981c4ea02"
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/2c0fc9fa937b11eaa1b71c4d701ab86e/items", handler)
+
+	want := ListItemCreateResponse{}
+	want.Success = true
+	want.Errors = []ResponseInfo{}
+	want.Messages = []ResponseInfo{}
+	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
+
+	actual, err := client.ReplaceListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListReplaceItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
+		Items: []ListItemCreateRequest{{
+			Hostname: &Hostname{
+				UrlHostname: "3fonteinen.be",
+			},
+			Comment: "hostname 3F",
+		}, {
+			Hostname: &Hostname{
+				UrlHostname: "cf.com",
+			},
+			Comment: "Hostname cf",
+		}}})
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestReplaceListItemsASN(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method, "Expected method 'PUT', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": {
+				"operation_id": "4da8780eeb215e6cb7f48dd981c4ea02"
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/2c0fc9fa937b11eaa1b71c4d701ab86e/items", handler)
+
+	want := ListItemCreateResponse{}
+	want.Success = true
+	want.Errors = []ResponseInfo{}
+	want.Messages = []ResponseInfo{}
+	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
+
+	actual, err := client.ReplaceListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListReplaceItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
+		Items: []ListItemCreateRequest{{
+			ASN:     Uint32Ptr(4567),
+			Comment: "ASN 4567",
+		}, {
+			ASN:     Uint32Ptr(8901),
+			Comment: "ASN 8901",
 		}}})
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
@@ -625,9 +896,8 @@ func TestDeleteListItems(t *testing.T) {
 	want.Messages = []ResponseInfo{}
 	want.Result.OperationID = "4da8780eeb215e6cb7f48dd981c4ea02"
 
-	actual, err := client.DeleteListItemsAsync(context.Background(), ListDeleteItemsParams{
-		AccountID: testAccountID,
-		ID:        "2c0fc9fa937b11eaa1b71c4d701ab86e",
+	actual, err := client.DeleteListItemsAsync(context.Background(), AccountIdentifier(testAccountID), ListDeleteItemsParams{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
 		Items: ListItemDeleteRequest{[]ListItemDeleteItemRequest{{
 			ID: "34b12448945f11eaa1b71c4d701ab86e",
 		}}}})
@@ -671,11 +941,93 @@ func TestGetListItemIP(t *testing.T) {
 		ModifiedOn: &modifiedOn,
 	}
 
-	actual, err := client.GetListItem(context.Background(), ListGetItemParams{
-		AccountID: testAccountID,
-		ListID:    "2c0fc9fa937b11eaa1b71c4d701ab86e",
-		ID:        "34b12448945f11eaa1b71c4d701ab86e",
-	})
+	actual, err := client.GetListItem(context.Background(), AccountIdentifier(testAccountID), "2c0fc9fa937b11eaa1b71c4d701ab86e", "34b12448945f11eaa1b71c4d701ab86e")
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestGetListItemHostname(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": {
+				"id": "2c0fc9fa937b11eaa1b71c4d701ab86e",
+				"hostname": {
+					"url_hostname": "cloudflare.com"
+				},
+				"comment": "CF Hostname",
+				"created_on": "2023-01-01T08:00:00Z",
+				"modified_on": "2023-01-10T14:00:00Z"
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/2c0fc9fa937b11eaa1b71c4d701ab86e/items/"+
+		"34b12448945f11eaa1b71c4d701ab86e", handler)
+
+	createdOn, _ := time.Parse(time.RFC3339, "2023-01-01T08:00:00Z")
+	modifiedOn, _ := time.Parse(time.RFC3339, "2023-01-10T14:00:00Z")
+
+	want := ListItem{
+		ID: "2c0fc9fa937b11eaa1b71c4d701ab86e",
+		Hostname: &Hostname{
+			UrlHostname: "cloudflare.com",
+		},
+		Comment:    "CF Hostname",
+		CreatedOn:  &createdOn,
+		ModifiedOn: &modifiedOn,
+	}
+
+	actual, err := client.GetListItem(context.Background(), AccountIdentifier(testAccountID), "2c0fc9fa937b11eaa1b71c4d701ab86e", "34b12448945f11eaa1b71c4d701ab86e")
+	if assert.NoError(t, err) {
+		assert.Equal(t, want, actual)
+	}
+}
+
+func TestGetListItemASN(t *testing.T) {
+	setup()
+	defer teardown()
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method, "Expected method 'GET', got %s", r.Method)
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{
+			"result": {
+				"id": "2c0fc9fa937b11eaa1b71c4d701ab86e",
+				"asn": 5555,
+				"comment": "asn 5555",
+				"created_on": "2023-01-01T08:00:00Z",
+				"modified_on": "2023-01-10T14:00:00Z"
+			},
+			"success": true,
+			"errors": [],
+			"messages": []
+		}`)
+	}
+
+	mux.HandleFunc("/accounts/"+testAccountID+"/rules/lists/2c0fc9fa937b11eaa1b71c4d701ab86e/items/"+
+		"34b12448945f11eaa1b71c4d701ab86e", handler)
+
+	createdOn, _ := time.Parse(time.RFC3339, "2023-01-01T08:00:00Z")
+	modifiedOn, _ := time.Parse(time.RFC3339, "2023-01-10T14:00:00Z")
+
+	want := ListItem{
+		ID:         "2c0fc9fa937b11eaa1b71c4d701ab86e",
+		ASN:        Uint32Ptr(5555),
+		Comment:    "asn 5555",
+		CreatedOn:  &createdOn,
+		ModifiedOn: &modifiedOn,
+	}
+
+	actual, err := client.GetListItem(context.Background(), AccountIdentifier(testAccountID), "2c0fc9fa937b11eaa1b71c4d701ab86e", "34b12448945f11eaa1b71c4d701ab86e")
 	if assert.NoError(t, err) {
 		assert.Equal(t, want, actual)
 	}
@@ -686,7 +1038,7 @@ func TestPollListTimeout(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := client.pollListBulkOperation(ctx, testAccountID, "list1")
+	err := client.pollListBulkOperation(ctx, AccountIdentifier(testAccountID), "list1")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.WithinDuration(t, start, time.Now(), time.Second,
 		"pollListBulkOperation took too much time with an expiring context")
